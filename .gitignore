@@ -1,0 +1,15 @@
+# This repository must remain source-only and secret-free.
+*.token
+*.tokens
+*.secret
+*.secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.pfx
+*.p12
+coverage/
+__pycache__/
+*.py[cod]
