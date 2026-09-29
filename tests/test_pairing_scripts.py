@@ -24,8 +24,15 @@ class PairingScriptContractTests(unittest.TestCase):
         self.assertIn("Start-AcceptanceTarget.ps1", source)
         self.assertIn("-PairingId $PairingId", source)
         self.assertIn("[switch]$DryRun", source)
-        self.assertIn("-DryRun:$DryRun", source)
+        self.assertIn("-DryRun:$ValidatePairing", source)
         self.assertNotIn("ExecutionPolicy Bypass", source)
+
+    def test_clean_bootstrap_dry_run_precedes_all_mutation(self):
+        source = BOOTSTRAP.read_text(encoding="utf-8")
+        flow = source[source.index("if ($env:OS"):]
+        dry = flow.index("if ($DryRun)")
+        for marker in ("winget.exe install", "git.exe init", "git.exe -C $Destination fetch", "& $targetScript"):
+            self.assertLess(dry, flow.index(marker), marker)
 
     def test_controller_publishes_only_an_expiring_public_key_on_temporary_branch(self):
         source = OLD.read_text(encoding="utf-8")
@@ -36,14 +43,20 @@ class PairingScriptContractTests(unittest.TestCase):
             "public_key",
             "expires_utc",
             "launcher_commit",
+            "public_key_sha256",
             "gh auth status",
             "--method DELETE",
             "finally",
+            "--expect-pairing",
+            "remove-harness.sh",
         ):
             self.assertIn(required, source)
         self.assertIn(".pub", source)
         self.assertNotRegex(source, r"Get-Content\s+(?:-LiteralPath\s+)?\$KeyPath(?:\s|$)")
         self.assertNotRegex(source, r"-----BEGIN (?:OPENSSH |RSA |EC )?PRIVATE KEY-----")
+        self.assertIn("personal-recovery-acceptance-$pairingId", source)
+        self.assertIn("rm -f -- $ControllerKey", source)
+        self.assertIn("Could not confirm deletion", source)
 
     def test_target_validates_pairing_and_checkout_before_launching_harness(self):
         source = NEW.read_text(encoding="utf-8")
@@ -53,6 +66,7 @@ class PairingScriptContractTests(unittest.TestCase):
             "expires_utc",
             "public_key",
             "launcher_commit",
+            "public_key_sha256",
             "ConvertFrom-Json",
             "rev-parse HEAD",
             "remote.origin.url",
@@ -60,6 +74,8 @@ class PairingScriptContractTests(unittest.TestCase):
             "Start-PersonalInfraRecovery.ps1",
             "-AcceptanceHarness",
             "-ControllerPublicKey",
+            "-AcceptancePairingId",
+            "-AcceptanceExpiresUtc",
         ):
             self.assertIn(required, source)
         self.assertIn("https://api.github.com/repos/$Repository/contents/pairings/", source)

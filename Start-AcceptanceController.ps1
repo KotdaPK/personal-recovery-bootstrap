@@ -16,6 +16,10 @@ param(
     [int]$PairingLifetimeMinutes = 30,
 
     [Parameter()]
+    [ValidateRange(1, 24)]
+    [int]$AccessLifetimeHours = 8,
+
+    [Parameter()]
     [string]$Target,
 
     [Parameter()]
@@ -27,7 +31,7 @@ $ErrorActionPreference = 'Stop'
 
 $Repository = 'KotdaPK/personal-recovery-bootstrap'
 $ExpectedOrigin = 'https://github.com/KotdaPK/personal-recovery-bootstrap.git'
-$ExpectedControllerCommit = '5dd47f126a042425e03f439f1510f26f79f3d227'
+$ExpectedControllerCommit = 'e63e70edac892b7bb6ad689de868dfde9758fe0f'
 
 
 function Invoke-CheckedNative {
@@ -48,12 +52,14 @@ function Assert-ControllerTarget {
 
 function Remove-PairingBranch {
     param([Parameter(Mandatory = $true)][string]$Branch)
-    & wsl.exe -- gh api --method DELETE "repos/$Repository/git/refs/heads/$Branch" 2>$null
-    if ($LASTEXITCODE -ne 0) {
-        Write-Warning "Could not delete temporary GitHub branch $Branch. Delete it manually after checking ownership."
-        return $false
+    for ($attempt = 1; $attempt -le 3; $attempt++) {
+        & wsl.exe -- gh api --method DELETE "repos/$Repository/git/refs/heads/$Branch" 2>$null
+        $remainingOutput = @(& wsl.exe -- gh api "repos/$Repository/git/matching-refs/heads/acceptance-pairing-" --jq "[.[] | select(.ref == `"refs/heads/$Branch`")] | length" 2>$null)
+        if ($LASTEXITCODE -eq 0 -and $remainingOutput.Count -eq 1 -and $remainingOutput[0].Trim() -eq '0') { return $true }
+        if ($attempt -lt 3) { Start-Sleep -Seconds $attempt }
     }
-    return $true
+    Write-Warning "Could not confirm deletion of temporary GitHub branch $Branch after bounded retries."
+    return $false
 }
 
 if ($env:OS -ne 'Windows_NT') { throw 'Run this controller wrapper from Windows PowerShell on the old/current laptop.' }
@@ -62,7 +68,6 @@ if (-not (Get-Command git.exe -ErrorAction SilentlyContinue)) { throw 'Git for W
 $WslHome = (& wsl.exe -- bash -lc 'printf $HOME').Trim()
 if ($LASTEXITCODE -ne 0 -or -not $WslHome.StartsWith('/')) { throw 'Could not resolve the old laptop WSL home.' }
 $ControllerRepo = "$WslHome/src/personal-infra"
-$ControllerKey = "$WslHome/.ssh/personal-recovery-acceptance"
 
 $RepoRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $origin = (& git.exe -C $RepoRoot config --get remote.origin.url).Trim()
@@ -86,21 +91,27 @@ if ($DryRun) {
     Write-Host 'Dry run: no key, pairing branch, or controller run was created.'
     return
 }
-Invoke-CheckedNative { & wsl.exe -- bash "$ControllerRepo/acceptance/prepare-controller.sh" } 'Could not prepare the isolated controller key'
+$pairingId = [Guid]::NewGuid().ToString('N').Substring(0, 12)
+$ControllerKey = "$WslHome/.ssh/personal-recovery-acceptance-$pairingId"
+$ControllerKnownHosts = "$WslHome/.ssh/personal-recovery-acceptance-known-hosts-$pairingId"
+Invoke-CheckedNative { & wsl.exe -- env "ACCEPTANCE_KEY_PATH=$ControllerKey" bash "$ControllerRepo/acceptance/prepare-controller.sh" } 'Could not prepare the isolated controller key'
 $publicKey = (& wsl.exe -- cat "${ControllerKey}.pub").Trim()
 if ($LASTEXITCODE -ne 0 -or $publicKey -notmatch '^(ssh-ed25519|ecdsa-sha2-nistp(256|384|521)|ssh-rsa) [A-Za-z0-9+/]+={0,2}( .*)?$') {
     throw 'The generated controller public key is invalid.'
 }
-
-$pairingId = [Guid]::NewGuid().ToString('N').Substring(0, 12)
+$sha = [Security.Cryptography.SHA256]::Create()
+try { $publicKeySha256 = ([BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($publicKey)))).Replace('-', '').ToLowerInvariant() } finally { $sha.Dispose() }
 $branch = "acceptance-pairing-$pairingId"
 $expiresUtc = [DateTime]::UtcNow.AddMinutes($PairingLifetimeMinutes).ToString('o')
+$accessExpiresUtc = [DateTime]::UtcNow.AddHours($AccessLifetimeHours).ToString('o')
 $pairing = [ordered]@{
     schema_version = 1
     pairing_id = $pairingId
     expires_utc = $expiresUtc
     launcher_commit = $head
     public_key = $publicKey
+    public_key_sha256 = $publicKeySha256
+    access_expires_utc = $accessExpiresUtc
     purpose = 'personal-recovery-acceptance-public-key-rendezvous'
 }
 $payload = $pairing | ConvertTo-Json -Compress
@@ -121,7 +132,8 @@ try {
     Write-Host 'ACCEPTANCE PAIRING READY'
     Write-Host '========================================================'
     Write-Host "Pairing ID: $pairingId"
-    Write-Host "Expires UTC: $expiresUtc"
+    Write-Host "Pairing retrieval expires UTC: $expiresUtc"
+    Write-Host "Target access auto-removal UTC: $accessExpiresUtc"
     Write-Host ''
     Write-Host 'On the NEW/CLEAN laptop, run these PowerShell commands:'
     Write-Host "  `$uri = 'https://raw.githubusercontent.com/KotdaPK/personal-recovery-bootstrap/$head/Start-CleanAcceptance.ps1'"
@@ -135,11 +147,27 @@ try {
 
     if (-not $Target) { $Target = Read-Host 'After the new laptop reports READY, paste its exact WindowsUser@LAN-IP target' }
     Assert-ControllerTarget -Value $Target
+    if (-not (Remove-PairingBranch -Branch $branch)) { throw 'Could not confirm deletion of the temporary pairing branch; refusing to start remote recovery.' }
+    $published = $false
 
-    if (Remove-PairingBranch -Branch $branch) { $published = $false }
-
-    & wsl.exe -- env "ACCEPTANCE_KEY_PATH=$ControllerKey" bash "$ControllerRepo/acceptance/run-controller.sh" $Target
-    if ($LASTEXITCODE -ne 0) { throw "Acceptance controller failed (exit code $LASTEXITCODE)." }
+    $controllerFailure = $null
+    $cleanupFailure = $null
+    try {
+        & wsl.exe -- env "ACCEPTANCE_KEY_PATH=$ControllerKey" "ACCEPTANCE_KNOWN_HOSTS=$ControllerKnownHosts" bash "$ControllerRepo/acceptance/run-controller.sh" $Target --expect-pairing $pairingId
+        if ($LASTEXITCODE -ne 0) { throw "Acceptance controller failed (exit code $LASTEXITCODE)." }
+    } catch {
+        $controllerFailure = $_
+    } finally {
+        & wsl.exe -- env "ACCEPTANCE_KEY_PATH=$ControllerKey" "ACCEPTANCE_KNOWN_HOSTS=$ControllerKnownHosts" bash "$ControllerRepo/acceptance/collect-evidence.sh" $Target
+        if ($LASTEXITCODE -ne 0) { Write-Warning 'Acceptance evidence collection did not complete; continuing mandatory access cleanup.' }
+        & wsl.exe -- env "ACCEPTANCE_KEY_PATH=$ControllerKey" "ACCEPTANCE_KNOWN_HOSTS=$ControllerKnownHosts" bash "$ControllerRepo/acceptance/remove-harness.sh" $Target --expect-pairing $pairingId
+        if ($LASTEXITCODE -ne 0) { $cleanupFailure = "Target acceptance cleanup failed (exit code $LASTEXITCODE); the target-side expiry task remains the fail-safe." }
+    }
+    if ($cleanupFailure) { throw $cleanupFailure }
+    if ($controllerFailure) { throw $controllerFailure }
 } finally {
-    if ($published) { [void](Remove-PairingBranch -Branch $branch) }
+    $branchCleanupFailed = $false
+    if ($published -and -not (Remove-PairingBranch -Branch $branch)) { $branchCleanupFailed = $true }
+    if ($ControllerKey) { & wsl.exe -- rm -f -- $ControllerKey "${ControllerKey}.pub" $ControllerKnownHosts }
+    if ($branchCleanupFailed) { throw "Could not confirm deletion of temporary pairing branch $branch." }
 }

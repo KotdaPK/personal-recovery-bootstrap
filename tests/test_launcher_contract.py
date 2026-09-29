@@ -21,7 +21,7 @@ class LauncherContractTests(unittest.TestCase):
         self.assertRegex(self.source, r"bootstrap\.ps1")
         self.assertRegex(self.source, r"-Apply")
         self.assertIn("-Distro $Distro", self.source)
-        self.assertIn("5dd47f126a042425e03f439f1510f26f79f3d227", self.source)
+        self.assertIn("e63e70edac892b7bb6ad689de868dfde9758fe0f", self.source)
         self.assertIn("-WslUser $WslUser", self.source)
 
     def test_preflights_windows_before_external_tools(self):
@@ -166,11 +166,24 @@ class LauncherContractTests(unittest.TestCase):
             "recovery_destination = $Destination",
             "distro = $Distro",
             "wsl_user = $WslUser",
+            "pairing_id = $AcceptancePairingId",
+            "public_key_sha256 = $ControllerPublicKeySha256",
+            "expires_utc = $AcceptanceExpiresUtc",
             "TEST CONTROL PLANE",
         ):
             self.assertIn(field, status_function)
         self.assertNotIn("authorized_keys_path", status_function)
         self.assertNotIn("checkpoint =", status_function)
+
+    def test_acceptance_access_has_target_side_expiry_cleanup(self):
+        self.assertIn("[string]$AcceptanceExpiresUtc", self.source)
+        self.assertIn("[string]$AcceptancePairingId", self.source)
+        self.assertIn("[string]$ControllerPublicKeySha256", self.source)
+        self.assertIn("Register-ScheduledTask", self.source)
+        self.assertIn("New-ScheduledTaskTrigger -Once", self.source)
+        self.assertIn("SYSTEM", self.source)
+        self.assertIn("remove-acceptance-harness.ps1", self.source)
+        self.assertIn("Unregister-ScheduledTask", self.source)
 
     def test_acceptance_key_selection_is_user_specific_and_firewall_is_lan_safe(self):
         self.assertIn("sshd.exe -T -C $connection", self.source)

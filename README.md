@@ -86,9 +86,11 @@ organization's approved code-signing or file-unblocking process.
 
 The recommended workflow removes manual public-key copying. The public key is
 not confidential; the private key is. `Start-AcceptanceController.ps1` stores
-only the ephemeral public key and short-lived nonsecret metadata on a temporary
+only a unique-per-pairing public key, its SHA-256 binding, and short-lived
+nonsecret metadata on a temporary
 GitHub branch. The branch is removed before recovery begins (and retried from a
-`finally` block on failure). The private key never leaves the old laptop.
+`finally` block on failure); recovery refuses to start unless deletion is
+confirmed. The private key never leaves the old laptop.
 
 1. On the **old/current Windows laptop**, clone or update this public repository
    and run:
@@ -100,7 +102,8 @@ GitHub branch. The branch is removed before recovery begins (and retried from a
    ```
 
    The script verifies its clean published checkout, verifies the reviewed
-   `personal-infra` controller checkout in WSL, generates the isolated key, and
+   `personal-infra` controller checkout in WSL, generates a new isolated key for
+   that pairing, and
    prints an exact target command containing a random 12-character pairing ID.
    Leave this script running at its target prompt.
 
@@ -118,13 +121,19 @@ GitHub branch. The branch is removed before recovery begins (and retried from a
 
    The target script fetches the public-key-only payload from the temporary
    GitHub branch, validates its schema, expiry, purpose, and exact launcher
-   commit, verifies the clone origin and cleanliness, then invokes the canonical
-   `-AcceptanceHarness` path. Approve the normal UAC prompt.
+   commit and public-key hash, verifies the clone origin and cleanliness, then
+   invokes the canonical `-AcceptanceHarness` path. Approve the normal UAC
+   prompt. The target installs a SYSTEM expiry task that removes only the marked
+   key, acceptance firewall rule, and acceptance metadata if the controller
+   never reaches cleanup.
 
 3. When the new laptop prints `REMOTE ACCEPTANCE TARGET READY`, paste its exact
    `WindowsUser@LAN-IP` value into the old laptop's waiting prompt. The old
-   script deletes the temporary GitHub branch and starts the existing reviewed
-   WSL controller automatically.
+   script confirms deletion of the temporary GitHub branch and starts the
+   existing reviewed WSL controller automatically. It collects evidence,
+   removes the target harness even on controller failure, and destroys the
+   per-pairing local key and isolated `known_hosts` file. If connectivity is
+   lost, target-side expiry remains the fail-safe.
 
 No Google credential is transferred. GitHub credentials stay with `gh` on the
 old laptop, and provider credentials remain in their official authentication
@@ -203,8 +212,10 @@ target and later invoke ordinary recovery deliberately.
    (`kotda` by default), applies the repository-owned WSL/systemd configuration,
    and runs every Linux phase explicitly as that account.
 
-4. Setup intentionally remains enabled. When the acceptance run is complete,
-   remove only its marked key, status/checkpoint files, and firewall rule:
+4. The two-machine wrapper removes setup automatically after evidence
+   collection. A direct/manual harness is also bounded by its target-side expiry
+   task. To remove it earlier, remove only its marked key, status/checkpoint
+   files, cleanup task, and firewall rule:
 
    ```powershell
    powershell.exe -NoProfile -File .\Start-PersonalInfraRecovery.ps1 -RemoveAcceptanceHarness

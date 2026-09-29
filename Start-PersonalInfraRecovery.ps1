@@ -29,6 +29,15 @@ param(
     [string]$ControllerPublicKey,
 
     [Parameter()]
+    [string]$AcceptancePairingId,
+
+    [Parameter()]
+    [string]$AcceptanceExpiresUtc,
+
+    [Parameter()]
+    [string]$ControllerPublicKeySha256,
+
+    [Parameter()]
     [switch]$RemoveAcceptanceHarness,
 
     [Parameter(DontShow = $true)]
@@ -53,7 +62,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 $ExpectedOrigin = 'https://github.com/KotdaPK/personal-infra.git'
-$ExpectedPersonalInfraCommit = '5dd47f126a042425e03f439f1510f26f79f3d227'
+$ExpectedPersonalInfraCommit = 'e63e70edac892b7bb6ad689de868dfde9758fe0f'
 
 function Assert-WindowsHost {
     if ($env:OS -ne 'Windows_NT') {
@@ -261,6 +270,9 @@ $AcceptanceStateDirectory = Join-Path $env:ProgramData 'PersonalRecovery'
 $AcceptanceTargetPath = Join-Path $AcceptanceStateDirectory 'acceptance-target.json'
 $AcceptanceCheckpointPath = Join-Path $AcceptanceStateDirectory 'acceptance-checkpoint.json'
 $AcceptanceRecoveryCheckpointPath = Join-Path $AcceptanceStateDirectory 'acceptance-recovery-checkpoint.json'
+$AcceptanceCleanupStatePath = Join-Path $AcceptanceStateDirectory 'acceptance-cleanup.json'
+$AcceptanceCleanupScriptPath = Join-Path $AcceptanceStateDirectory 'remove-acceptance-harness.ps1'
+$AcceptanceCleanupTaskName = 'PersonalRecovery-Acceptance-ExpiryCleanup'
 
 function Test-IsAdministrator {
     $principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
@@ -286,6 +298,9 @@ function Ensure-AcceptanceElevation {
     if ($AcceptanceHarness) {
         $forwarded += '-AcceptanceHarness'
         if ($ControllerPublicKey) { $forwarded += @('-ControllerPublicKey', (ConvertTo-ProcessArgument $ControllerPublicKey)) }
+        if ($AcceptancePairingId) { $forwarded += @('-AcceptancePairingId', (ConvertTo-ProcessArgument $AcceptancePairingId)) }
+        if ($AcceptanceExpiresUtc) { $forwarded += @('-AcceptanceExpiresUtc', (ConvertTo-ProcessArgument $AcceptanceExpiresUtc)) }
+        if ($ControllerPublicKeySha256) { $forwarded += @('-ControllerPublicKeySha256', (ConvertTo-ProcessArgument $ControllerPublicKeySha256)) }
     }
     if ($RemoveAcceptanceHarness) { $forwarded += '-RemoveAcceptanceHarness' }
     $forwarded += @(
@@ -417,6 +432,45 @@ function Ensure-AcceptanceFirewallRule {
     }
 }
 
+function Install-AcceptanceExpiryCleanup {
+    param(
+        [Parameter(Mandatory = $true)][string]$KeyPath,
+        [Parameter(Mandatory = $true)][DateTimeOffset]$Expires
+    )
+    if (-not (Test-Path -LiteralPath $AcceptanceStateDirectory)) { New-Item -ItemType Directory -Path $AcceptanceStateDirectory -Force | Out-Null }
+    [ordered]@{ key_path = $KeyPath; expires_utc = $Expires.ToUniversalTime().ToString('o') } |
+        ConvertTo-Json | Set-Content -LiteralPath $AcceptanceCleanupStatePath -Encoding utf8
+    $cleanupSource = @'
+$ErrorActionPreference = 'Stop'
+$stateDirectory = Join-Path $env:ProgramData 'PersonalRecovery'
+$statePath = Join-Path $stateDirectory 'acceptance-cleanup.json'
+$marker = 'personal-recovery-acceptance'
+if (Test-Path -LiteralPath $statePath) {
+    $state = Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json
+    if ($state.key_path -and (Test-Path -LiteralPath $state.key_path)) {
+        $remaining = @(Get-Content -LiteralPath $state.key_path | Where-Object { $_ -notmatch ('\s' + [regex]::Escape($marker) + '$') })
+        [IO.File]::WriteAllLines([string]$state.key_path, [string[]]$remaining, [Text.Encoding]::ASCII)
+    }
+}
+Remove-NetFirewallRule -Name 'PersonalRecovery-Acceptance-OpenSSH' -ErrorAction SilentlyContinue
+Unregister-ScheduledTask -TaskName 'PersonalRecovery-Acceptance-ExpiryCleanup' -Confirm:$false -ErrorAction SilentlyContinue
+Remove-Item -Force -ErrorAction SilentlyContinue `
+    (Join-Path $stateDirectory 'acceptance-target.json'), `
+    (Join-Path $stateDirectory 'acceptance-checkpoint.json'), `
+    (Join-Path $stateDirectory 'acceptance-recovery-checkpoint.json'), `
+    $statePath
+Remove-Item -LiteralPath $MyInvocation.MyCommand.Path -Force -ErrorAction SilentlyContinue
+'@
+    Set-Content -LiteralPath $AcceptanceCleanupScriptPath -Value $cleanupSource -Encoding utf8
+    & icacls.exe $AcceptanceCleanupStatePath /inheritance:r /grant:r 'SYSTEM:(F)' /grant:r 'Administrators:(F)' | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw 'Could not protect acceptance cleanup state.' }
+    & icacls.exe $AcceptanceCleanupScriptPath /inheritance:r /grant:r 'SYSTEM:(F)' /grant:r 'Administrators:(F)' | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw 'Could not protect acceptance cleanup script.' }
+    $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument "-NoProfile -NonInteractive -File `"$AcceptanceCleanupScriptPath`""
+    $trigger = New-ScheduledTaskTrigger -Once -At $Expires.LocalDateTime
+    Register-ScheduledTask -TaskName $AcceptanceCleanupTaskName -Action $action -Trigger $trigger -User 'SYSTEM' -RunLevel Highest -Force | Out-Null
+}
+
 function Write-AcceptanceStatus {
     param(
         [Parameter(Mandatory = $true)][string]$LanIp,
@@ -425,24 +479,40 @@ function Write-AcceptanceStatus {
         [Parameter(Mandatory = $true)][bool]$ControllerKeyInstalled
     )
     if (-not (Test-Path -LiteralPath $AcceptanceStateDirectory)) { New-Item -ItemType Directory -Path $AcceptanceStateDirectory -Force | Out-Null }
-    $status = [ordered]@{ disclaimer = 'TEST CONTROL PLANE (test-control-plane) ONLY; no ordinary recovery was invoked and no private key is stored.'; hostname = $env:COMPUTERNAME; windows_user = $Account; lan_ip = $LanIp; ssh_port = 22; sshd_ready = $SshdReady; controller_key_installed = $ControllerKeyInstalled; launcher_path = $PSCommandPath; recovery_destination = $Destination; distro = $Distro; wsl_user = $WslUser }
+    $status = [ordered]@{ disclaimer = 'TEST CONTROL PLANE (test-control-plane) ONLY; no ordinary recovery was invoked and no private key is stored.'; hostname = $env:COMPUTERNAME; windows_user = $Account; lan_ip = $LanIp; ssh_port = 22; sshd_ready = $SshdReady; controller_key_installed = $ControllerKeyInstalled; launcher_path = $PSCommandPath; recovery_destination = $Destination; distro = $Distro; wsl_user = $WslUser; pairing_id = $AcceptancePairingId; public_key_sha256 = $ControllerPublicKeySha256; expires_utc = $AcceptanceExpiresUtc }
     $status | ConvertTo-Json | Set-Content -LiteralPath $AcceptanceTargetPath -Encoding utf8
 }
 
 function Invoke-AcceptanceHarness {
     if (-not $ControllerPublicKey) { $script:ControllerPublicKey = Read-Host 'Paste one controller OpenSSH public key' }
     Assert-ControllerPublicKey -Key $ControllerPublicKey
+    if (-not $AcceptancePairingId) { $script:AcceptancePairingId = [Guid]::NewGuid().ToString('N').Substring(0, 12) }
+    if ($AcceptancePairingId -notmatch '^[0-9a-f]{12}$') { throw 'AcceptancePairingId must contain exactly 12 lowercase hexadecimal characters.' }
+    if (-not $AcceptanceExpiresUtc) { $script:AcceptanceExpiresUtc = [DateTimeOffset]::UtcNow.AddHours(8).ToString('o') }
+    try { $expires = [DateTimeOffset]::Parse($AcceptanceExpiresUtc).ToUniversalTime() } catch { throw 'AcceptanceExpiresUtc is invalid.' }
+    if ($expires -le [DateTimeOffset]::UtcNow -or $expires -gt [DateTimeOffset]::UtcNow.AddHours(25)) { throw 'AcceptanceExpiresUtc is outside the allowed bounded window.' }
+    $sha = [Security.Cryptography.SHA256]::Create()
+    try { $computedKeyHash = ([BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($ControllerPublicKey)))).Replace('-', '').ToLowerInvariant() } finally { $sha.Dispose() }
+    if ($ControllerPublicKeySha256 -and $ControllerPublicKeySha256 -cne $computedKeyHash) { throw 'ControllerPublicKeySha256 does not match ControllerPublicKey.' }
+    $script:ControllerPublicKeySha256 = $computedKeyHash
     Ensure-OpenSshServer
     $selectedAccountIsAdministrator = Test-SelectedAccountInAdministrators -Sid $AcceptanceTargetSid
     $effectiveConfig = Get-EffectiveSshdConfig -Account $AcceptanceTargetUserName
     $keyPath = Get-AcceptanceAuthorizedKeysPath -EffectiveConfig $effectiveConfig -SelectedAccountIsAdministrator $selectedAccountIsAdministrator -UserProfile $AcceptanceTargetUserProfile
     Add-AcceptanceAuthorizedKey -Path $keyPath -Key $ControllerPublicKey -Account $AcceptanceTargetAccount
-    Ensure-AcceptanceFirewallRule
-    $lanIp = Get-AcceptanceLanAddress
-    if (-not (Get-NetTCPConnection -LocalPort 22 -State Listen -ErrorAction SilentlyContinue)) { throw 'sshd is not listening on TCP port 22.' }
-    $sshd = Get-Service -Name 'sshd' -ErrorAction Stop
-    if ($sshd.Status -ne 'Running' -or $sshd.StartType -ne 'Automatic') { throw 'sshd is not running with automatic startup.' }
-    Write-AcceptanceStatus -LanIp $lanIp -Account $AcceptanceTargetUserName -SshdReady $true -ControllerKeyInstalled $true
+    try {
+        Install-AcceptanceExpiryCleanup -KeyPath $keyPath -Expires $expires
+        Ensure-AcceptanceFirewallRule
+        $lanIp = Get-AcceptanceLanAddress
+        if (-not (Get-NetTCPConnection -LocalPort 22 -State Listen -ErrorAction SilentlyContinue)) { throw 'sshd is not listening on TCP port 22.' }
+        $sshd = Get-Service -Name 'sshd' -ErrorAction Stop
+        if ($sshd.Status -ne 'Running' -or $sshd.StartType -ne 'Automatic') { throw 'sshd is not running with automatic startup.' }
+        Write-AcceptanceStatus -LanIp $lanIp -Account $AcceptanceTargetUserName -SshdReady $true -ControllerKeyInstalled $true
+    } catch {
+        Remove-AcceptanceAuthorizedKey -Path $keyPath -Account $AcceptanceTargetAccount
+        Remove-NetFirewallRule -Name $AcceptanceRuleName -ErrorAction SilentlyContinue
+        throw
+    }
     Write-Host '========================================================'
     Write-Host 'REMOTE ACCEPTANCE TARGET READY'
     Write-Host '========================================================'
@@ -467,12 +537,20 @@ function Invoke-AcceptanceHarness {
 }
 
 function Remove-AcceptanceHarness {
+    if (Test-Path -LiteralPath $AcceptanceCleanupScriptPath -PathType Leaf) {
+        & $AcceptanceCleanupScriptPath
+        if (-not $?) { throw 'Acceptance cleanup script reported failure.' }
+        Write-Host 'Acceptance harness state removed. OpenSSH Server remains installed and unchanged.'
+        return
+    }
     $paths = @((Join-Path $env:ProgramData 'ssh\administrators_authorized_keys'), (Join-Path $AcceptanceTargetUserProfile '.ssh\authorized_keys'))
     foreach ($path in $paths) { Remove-AcceptanceAuthorizedKey -Path $path -Account $AcceptanceTargetAccount }
     Remove-NetFirewallRule -Name $AcceptanceRuleName -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $AcceptanceTargetPath -Force -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $AcceptanceCheckpointPath -Force -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $AcceptanceRecoveryCheckpointPath -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $AcceptanceCleanupStatePath -Force -ErrorAction SilentlyContinue
+    Unregister-ScheduledTask -TaskName $AcceptanceCleanupTaskName -Confirm:$false -ErrorAction SilentlyContinue
     Write-Host 'Acceptance harness state removed. OpenSSH Server remains installed and unchanged.'
 }
 

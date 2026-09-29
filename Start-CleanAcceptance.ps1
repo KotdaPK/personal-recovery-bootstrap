@@ -17,7 +17,10 @@ param(
     [string]$Destination = (Join-Path $HOME 'PersonalRecoveryAcceptance'),
 
     [Parameter()]
-    [switch]$DryRun
+    [switch]$DryRun,
+
+    [Parameter()]
+    [switch]$ValidatePairing
 )
 
 Set-StrictMode -Version Latest
@@ -28,6 +31,10 @@ if ($env:OS -ne 'Windows_NT') { throw 'Run this bootstrap from Windows PowerShel
 if (Test-Path -LiteralPath $Destination) {
     if (-not (Test-Path -LiteralPath $Destination -PathType Container)) { throw "Destination is not a directory: $Destination" }
     if (@(Get-ChildItem -LiteralPath $Destination -Force).Count -ne 0) { throw "Destination must be absent or empty: $Destination" }
+}
+if ($DryRun) {
+    Write-Host "Dry run: would verify/install Git, fetch exact launcher commit $LauncherCommit into $Destination, validate pairing $PairingId, and invoke the acceptance harness."
+    return
 }
 
 if (-not (Get-Command git.exe -ErrorAction SilentlyContinue)) {
@@ -60,5 +67,5 @@ if ($head -cne $LauncherCommit -or $originReadback -cne $Origin -or $status.Coun
 
 $targetScript = Join-Path $Destination 'Start-AcceptanceTarget.ps1'
 if (-not (Test-Path -LiteralPath $targetScript -PathType Leaf)) { throw 'Start-AcceptanceTarget.ps1 is missing from the verified checkout.' }
-& $targetScript -PairingId $PairingId -DryRun:$DryRun
+& $targetScript -PairingId $PairingId -DryRun:$ValidatePairing
 if (-not $?) { throw 'The clean acceptance target script reported failure.' }

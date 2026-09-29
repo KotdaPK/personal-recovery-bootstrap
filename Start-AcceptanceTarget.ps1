@@ -67,8 +67,16 @@ try { $expiresUtc = [DateTimeOffset]::Parse([string]$pairing.expires_utc).ToUniv
 $now = [DateTimeOffset]::UtcNow
 if ($expiresUtc -le $now) { throw 'Pairing has expired. Start a new pairing from the old/current laptop.' }
 if ($expiresUtc -gt $now.AddMinutes(61)) { throw 'Pairing expiration exceeds the allowed short-lived window.' }
+try { $accessExpiresUtc = [DateTimeOffset]::Parse([string]$pairing.access_expires_utc).ToUniversalTime() } catch { throw 'Acceptance access expiration is invalid.' }
+if ($accessExpiresUtc -le $now -or $accessExpiresUtc -gt $now.AddHours(25)) { throw 'Acceptance access expiration is outside the allowed bounded window.' }
+$accessExpiresText = $accessExpiresUtc.ToString('o')
 $publicKey = [string]$pairing.public_key
 Assert-PublicKey -Value $publicKey
+$sha = [Security.Cryptography.SHA256]::Create()
+try { $computedPublicKeySha256 = ([BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($publicKey)))).Replace('-', '').ToLowerInvariant() } finally { $sha.Dispose() }
+if ([string]$pairing.public_key_sha256 -notmatch '^[0-9a-f]{64}$' -or [string]$pairing.public_key_sha256 -cne $computedPublicKeySha256) {
+    throw 'Pairing public-key hash does not match its payload.'
+}
 
 $launcher = Join-Path $RepoRoot 'Start-PersonalInfraRecovery.ps1'
 if (-not (Test-Path -LiteralPath $launcher -PathType Leaf)) { throw 'Canonical recovery launcher is missing from this checkout.' }
@@ -80,5 +88,5 @@ if ($DryRun) {
 }
 
 Write-Host 'Pairing verified. Configuring this laptop as the acceptance target...'
-& $launcher -AcceptanceHarness -ControllerPublicKey $publicKey
+& $launcher -AcceptanceHarness -ControllerPublicKey $publicKey -AcceptancePairingId $PairingId -AcceptanceExpiresUtc $accessExpiresText -ControllerPublicKeySha256 $computedPublicKeySha256
 if (-not $?) { throw 'The acceptance target launcher reported failure.' }
