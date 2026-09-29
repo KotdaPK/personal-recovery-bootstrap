@@ -21,7 +21,7 @@ bootstrap.ps1 -Apply
 - Opens `gh auth login --web` only when GitHub authentication is not already
   verified for `github.com`.
 - Fetches only `https://github.com/KotdaPK/personal-infra.git` and checks out
-  approved immutable commit `0a2d7d340e48c32f383333129cc189c97eab5d33`.
+  the immutable commit pinned in `Start-PersonalInfraRecovery.ps1`.
 - Refuses configured Git URL rewrite rules rather than allowing an
   `insteadOf` rule to redirect the approved origin.
 - Refuses a destination that already contains any files, including hidden
@@ -81,6 +81,56 @@ inspect it, and independently verify its provenance before executing it.
 If PowerShell policy blocks the reviewed downloaded file, do not weaken policy
 with `ExecutionPolicy Bypass`. Review the file/hash again, then use your
 organization's approved code-signing or file-unblocking process.
+
+## Simplest two-machine acceptance workflow
+
+The recommended workflow removes manual public-key copying. The public key is
+not confidential; the private key is. `Start-AcceptanceController.ps1` stores
+only the ephemeral public key and short-lived nonsecret metadata on a temporary
+GitHub branch. The branch is removed before recovery begins (and retried from a
+`finally` block on failure). The private key never leaves the old laptop.
+
+1. On the **old/current Windows laptop**, clone or update this public repository
+   and run:
+
+   ```powershell
+   git clone https://github.com/KotdaPK/personal-recovery-bootstrap.git
+   cd personal-recovery-bootstrap
+   .\Start-AcceptanceController.ps1
+   ```
+
+   The script verifies its clean published checkout, verifies the reviewed
+   `personal-infra` controller checkout in WSL, generates the isolated key, and
+   prints an exact target command containing a random 12-character pairing ID.
+   Leave this script running at its target prompt.
+
+2. On the **new/clean Windows laptop**, run the commands printed by the old
+   laptop. They download one immutable bootstrap script; it installs Git when
+   absent, fetches the exact launcher commit, verifies it, and runs
+   `Start-AcceptanceTarget.ps1`. Their shape is:
+
+   ```powershell
+   $uri = 'https://raw.githubusercontent.com/KotdaPK/personal-recovery-bootstrap/<commit>/Start-CleanAcceptance.ps1'
+   Invoke-WebRequest -Uri $uri -OutFile .\Start-CleanAcceptance.ps1
+   Unblock-File .\Start-CleanAcceptance.ps1
+   .\Start-CleanAcceptance.ps1 -PairingId <12-character-id> -LauncherCommit <commit>
+   ```
+
+   The target script fetches the public-key-only payload from the temporary
+   GitHub branch, validates its schema, expiry, purpose, and exact launcher
+   commit, verifies the clone origin and cleanliness, then invokes the canonical
+   `-AcceptanceHarness` path. Approve the normal UAC prompt.
+
+3. When the new laptop prints `REMOTE ACCEPTANCE TARGET READY`, paste its exact
+   `WindowsUser@LAN-IP` value into the old laptop's waiting prompt. The old
+   script deletes the temporary GitHub branch and starts the existing reviewed
+   WSL controller automatically.
+
+No Google credential is transferred. GitHub credentials stay with `gh` on the
+old laptop, and provider credentials remain in their official authentication
+flows. A Google-secret transport would add credential and lifecycle complexity
+without protecting anything confidential, because only the SSH public key is
+published.
 
 ## Acceptance SSH control plane (clean Windows target)
 
