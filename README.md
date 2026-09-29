@@ -16,11 +16,14 @@ bootstrap.ps1 -Apply
 
 - Requires Windows PowerShell 5.1 or newer.
 - Contains no credential, token, SSH key, or personal-infrastructure state.
-- Installs only the exact `GitHub.cli` Winget package, and only when `gh` is
-  absent.
+- Installs only the exact `Git.Git` and `GitHub.cli` Winget packages, and only
+  when their commands are absent.
 - Opens `gh auth login --web` only when GitHub authentication is not already
   verified for `github.com`.
-- Clones only `https://github.com/KotdaPK/personal-infra.git`.
+- Fetches only `https://github.com/KotdaPK/personal-infra.git` and checks out
+  approved immutable commit `a8621f4f1ee9af3980efd701cc8161ac9b878853`.
+- Refuses configured Git URL rewrite rules rather than allowing an
+  `insteadOf` rule to redirect the approved origin.
 - Refuses a destination that already contains any files, including hidden
   files. It never repurposes or deletes an existing checkout.
 - Before handoff, requires the exact `origin` URL and an empty
@@ -71,6 +74,8 @@ inspect it, and independently verify its provenance before executing it.
    powershell.exe -NoProfile -File .\Start-PersonalInfraRecovery.ps1
    # or:
    powershell.exe -NoProfile -File .\Start-PersonalInfraRecovery.ps1 -Destination 'C:\src\personal-infra'
+   # Isolated acceptance distro:
+   powershell.exe -NoProfile -File .\Start-PersonalInfraRecovery.ps1 -Distro 'RecoveryAcceptance'
    ```
 
 If PowerShell policy blocks the reviewed downloaded file, do not weaken policy
@@ -81,15 +86,17 @@ organization's approved code-signing or file-unblocking process.
 
 1. Confirms Windows.
 2. Refuses a nonempty destination.
-3. Confirms Git is available.
-4. Checks `gh`; if missing, installs `GitHub.cli` through Winget.
+3. Checks Git; if missing, installs exact package `Git.Git` through Winget.
+4. Checks `gh`; if missing, installs exact package `GitHub.cli` through Winget.
 5. Checks `gh auth status --hostname github.com`; when needed, guides
    `gh auth login --hostname github.com --web` and verifies it again. It then
    runs `gh auth setup-git` so Git can use the verified GitHub CLI credential
    helper for the HTTPS clone.
-6. Clones the exact canonical HTTPS origin.
-7. Verifies it is a Git checkout, its exact remote origin, and a clean worktree.
-8. Hands off to the checked-out `bootstrap.ps1 -Apply`.
+6. Initializes a checkout, configures the exact canonical HTTPS origin, fetches
+   only the approved immutable commit, and checks it out detached.
+7. Verifies it is a Git checkout at the exact commit, with the exact remote
+   origin and a clean worktree.
+8. Hands off to the checked-out `bootstrap.ps1 -Apply -Distro <name>`.
 
 The launcher never asks for, displays, or stores a token. GitHub CLI owns its
 own authenticated session according to its documented secure storage behavior.

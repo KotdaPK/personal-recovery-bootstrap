@@ -20,6 +20,8 @@ class LauncherContractTests(unittest.TestCase):
         self.assertIn("https://github.com/KotdaPK/personal-infra.git", self.source)
         self.assertRegex(self.source, r"bootstrap\.ps1")
         self.assertRegex(self.source, r"-Apply")
+        self.assertIn("-Distro $Distro", self.source)
+        self.assertIn("a8621f4f1ee9af3980efd701cc8161ac9b878853", self.source)
 
     def test_preflights_windows_before_external_tools(self):
         flow = self.source[self.source.index("# Execution"):]
@@ -27,6 +29,11 @@ class LauncherContractTests(unittest.TestCase):
         gh_install = flow.index("Install-GitHubCli")
         self.assertLess(preflight, gh_install)
         self.assertIn("Windows only", self.source)
+
+    def test_installs_git_and_github_cli_from_exact_winget_packages(self):
+        self.assertIn("--id Git.Git --exact", self.source)
+        self.assertIn("--id GitHub.cli --exact", self.source)
+        self.assertIn("Add-MachineAndUserPath", self.source)
 
     def test_dry_run_exits_before_auth_install_or_clone(self):
         flow = self.source[self.source.index("# Execution"):]
@@ -48,6 +55,9 @@ class LauncherContractTests(unittest.TestCase):
         self.assertIn("Unexpected origin", self.source)
         self.assertIn("status --porcelain=v1", self.source)
         self.assertIn("Checkout is not clean", self.source)
+        self.assertIn("rev-parse HEAD", self.source)
+        self.assertIn("Unexpected checkout commit", self.source)
+        self.assertIn("Assert-NoGitUrlRewrite", self.source)
         validation = self.source.index("Assert-VerifiedCheckout")
         handoff = self.source.index("Invoke-CanonicalBootstrap")
         self.assertLess(validation, handoff)
@@ -59,8 +69,8 @@ class LauncherContractTests(unittest.TestCase):
 
     def test_configures_git_to_use_verified_gh_auth_before_clone(self):
         setup = self.source.index("gh auth setup-git")
-        clone = self.source.index("git clone")
-        self.assertLess(setup, clone)
+        fetch = self.source.index("fetch --depth 1 origin")
+        self.assertLess(setup, fetch)
 
     def test_source_contains_no_secret_assignment_or_token_literal(self):
         forbidden = [

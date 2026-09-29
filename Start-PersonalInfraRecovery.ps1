@@ -14,6 +14,9 @@ param(
     [string]$Destination = (Join-Path -Path $env:USERPROFILE -ChildPath 'src\personal-infra'),
 
     [Parameter()]
+    [string]$Distro = 'Ubuntu-24.04',
+
+    [Parameter()]
     [switch]$DryRun
 )
 
@@ -21,6 +24,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 $ExpectedOrigin = 'https://github.com/KotdaPK/personal-infra.git'
+$ExpectedPersonalInfraCommit = 'a8621f4f1ee9af3980efd701cc8161ac9b878853'
 
 function Assert-WindowsHost {
     if ($env:OS -ne 'Windows_NT') {
@@ -43,6 +47,28 @@ function Assert-EmptyDestination {
     }
 }
 
+function Add-MachineAndUserPath {
+    $env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' + [Environment]::GetEnvironmentVariable('Path', 'User')
+}
+
+function Install-Git {
+    if (Get-Command git -ErrorAction SilentlyContinue) {
+        return
+    }
+    if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
+        throw 'Git is required and winget was not found. Install Git for Windows, then rerun.'
+    }
+    Write-Host 'Git was not found. Installing Git.Git with winget...'
+    & winget install --id Git.Git --exact --source winget --accept-package-agreements --accept-source-agreements
+    if ($LASTEXITCODE -ne 0) {
+        throw "winget could not install Git.Git (exit code $LASTEXITCODE)."
+    }
+    Add-MachineAndUserPath
+    if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
+        throw 'Git installation completed but git is not on PATH. Open a new PowerShell window and rerun.'
+    }
+}
+
 function Install-GitHubCli {
     if (Get-Command gh -ErrorAction SilentlyContinue) {
         return
@@ -57,7 +83,7 @@ function Install-GitHubCli {
     if ($LASTEXITCODE -ne 0) {
         throw "winget could not install GitHub.cli (exit code $LASTEXITCODE)."
     }
-
+    Add-MachineAndUserPath
     if (-not (Get-Command gh -ErrorAction SilentlyContinue)) {
         throw 'GitHub CLI installation completed but gh is not on PATH. Open a new PowerShell window and rerun.'
     }
@@ -89,18 +115,34 @@ function Configure-GitHubGitCredential {
     }
 }
 
-function Assert-GitAvailable {
-    if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
-        throw 'Git is required but was not found on PATH. Install Git for Windows, then rerun.'
+function Assert-NoGitUrlRewrite {
+    $rewrites = @(& git config --show-origin --get-regexp '^url\..*\.insteadof$' 2>$null)
+    if ($LASTEXITCODE -eq 0 -and $rewrites.Count -gt 0) {
+        throw 'Git URL rewrite rules are configured; refusing a supply-chain-sensitive recovery clone.'
+    }
+    if ($LASTEXITCODE -notin @(0, 1)) {
+        throw "Could not inspect Git URL rewrite rules (exit code $LASTEXITCODE)."
     }
 }
 
 function Clone-CanonicalRepository {
     param([Parameter(Mandatory = $true)][string]$Path)
 
-    & git clone $ExpectedOrigin $Path
+    & git init $Path
     if ($LASTEXITCODE -ne 0) {
-        throw "Could not clone the canonical repository (exit code $LASTEXITCODE)."
+        throw "Could not initialize the recovery checkout (exit code $LASTEXITCODE)."
+    }
+    & git -C $Path remote add origin $ExpectedOrigin
+    if ($LASTEXITCODE -ne 0) {
+        throw "Could not configure the canonical origin (exit code $LASTEXITCODE)."
+    }
+    & git -C $Path fetch --depth 1 origin $ExpectedPersonalInfraCommit
+    if ($LASTEXITCODE -ne 0) {
+        throw "Could not fetch the approved personal-infra commit (exit code $LASTEXITCODE)."
+    }
+    & git -C $Path checkout --detach $ExpectedPersonalInfraCommit
+    if ($LASTEXITCODE -ne 0) {
+        throw "Could not check out the approved personal-infra commit (exit code $LASTEXITCODE)."
     }
 }
 
@@ -118,6 +160,11 @@ function Assert-VerifiedCheckout {
     }
     if ($origin.Trim() -cne $ExpectedOrigin) {
         throw "Unexpected origin '$($origin.Trim())'; expected '$ExpectedOrigin'."
+    }
+
+    $head = (& git -C $Path rev-parse HEAD)
+    if ($LASTEXITCODE -ne 0 -or $head.Trim() -cne $ExpectedPersonalInfraCommit) {
+        throw "Unexpected checkout commit '$($head.Trim())'; expected '$ExpectedPersonalInfraCommit'."
     }
 
     $status = @(& git -C $Path status --porcelain=v1)
@@ -138,7 +185,7 @@ function Invoke-CanonicalBootstrap {
     }
 
     Write-Host "Handing off to $bootstrap -Apply"
-    & $bootstrap -Apply
+    & $bootstrap -Apply -Distro $Distro
     if (-not $?) {
         throw 'bootstrap.ps1 -Apply reported failure.'
     }
@@ -154,10 +201,11 @@ if ($DryRun) {
     return
 }
 
-Assert-GitAvailable
+Install-Git
 Install-GitHubCli
 Ensure-GitHubAuthentication
 Configure-GitHubGitCredential
+Assert-NoGitUrlRewrite
 Clone-CanonicalRepository -Path $Destination
 Assert-VerifiedCheckout -Path $Destination
 Invoke-CanonicalBootstrap -Path $Destination
