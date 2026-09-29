@@ -21,7 +21,7 @@ bootstrap.ps1 -Apply
 - Opens `gh auth login --web` only when GitHub authentication is not already
   verified for `github.com`.
 - Fetches only `https://github.com/KotdaPK/personal-infra.git` and checks out
-  approved immutable commit `a8621f4f1ee9af3980efd701cc8161ac9b878853`.
+  approved immutable commit `2928b9aaa20065d218d52e3d1ea2db185c0a6afe`.
 - Refuses configured Git URL rewrite rules rather than allowing an
   `insteadOf` rule to redirect the approved origin.
 - Refuses a destination that already contains any files, including hidden

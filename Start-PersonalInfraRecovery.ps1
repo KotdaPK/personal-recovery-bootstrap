@@ -24,7 +24,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 $ExpectedOrigin = 'https://github.com/KotdaPK/personal-infra.git'
-$ExpectedPersonalInfraCommit = 'a8621f4f1ee9af3980efd701cc8161ac9b878853'
+$ExpectedPersonalInfraCommit = '2928b9aaa20065d218d52e3d1ea2db185c0a6afe'
 
 function Assert-WindowsHost {
     if ($env:OS -ne 'Windows_NT') {
