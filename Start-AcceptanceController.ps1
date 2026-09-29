@@ -54,8 +54,11 @@ function Remove-PairingBranch {
     param([Parameter(Mandatory = $true)][string]$Branch)
     for ($attempt = 1; $attempt -le 3; $attempt++) {
         & wsl.exe -- gh api --method DELETE "repos/$Repository/git/refs/heads/$Branch" 2>$null
-        $remainingOutput = @(& wsl.exe -- gh api "repos/$Repository/git/matching-refs/heads/acceptance-pairing-" --jq "[.[] | select(.ref == `"refs/heads/$Branch`")] | length" 2>$null)
-        if ($LASTEXITCODE -eq 0 -and $remainingOutput.Count -eq 1 -and $remainingOutput[0].Trim() -eq '0') { return $true }
+        $refsJson = (& wsl.exe -- gh api "repos/$Repository/git/matching-refs/heads/acceptance-pairing-" 2>$null) -join "`n"
+        if ($LASTEXITCODE -eq 0) {
+            try { $remaining = @($refsJson | ConvertFrom-Json | Where-Object { $_.ref -ceq "refs/heads/$Branch" }).Count } catch { $remaining = -1 }
+            if ($remaining -eq 0) { return $true }
+        }
         if ($attempt -lt 3) { Start-Sleep -Seconds $attempt }
     }
     Write-Warning "Could not confirm deletion of temporary GitHub branch $Branch after bounded retries."
