@@ -14,7 +14,10 @@ param(
     [string]$LauncherCommit,
 
     [Parameter()]
-    [string]$Destination = (Join-Path $HOME 'PersonalRecoveryAcceptance')
+    [string]$Destination = (Join-Path $HOME 'PersonalRecoveryAcceptance'),
+
+    [Parameter()]
+    [switch]$DryRun
 )
 
 Set-StrictMode -Version Latest
@@ -57,5 +60,5 @@ if ($head -cne $LauncherCommit -or $originReadback -cne $Origin -or $status.Coun
 
 $targetScript = Join-Path $Destination 'Start-AcceptanceTarget.ps1'
 if (-not (Test-Path -LiteralPath $targetScript -PathType Leaf)) { throw 'Start-AcceptanceTarget.ps1 is missing from the verified checkout.' }
-& $targetScript -PairingId $PairingId
+& $targetScript -PairingId $PairingId -DryRun:$DryRun
 if (-not $?) { throw 'The clean acceptance target script reported failure.' }

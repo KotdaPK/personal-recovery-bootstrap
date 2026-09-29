@@ -23,6 +23,8 @@ class PairingScriptContractTests(unittest.TestCase):
         self.assertIn("checkout --detach $LauncherCommit", source)
         self.assertIn("Start-AcceptanceTarget.ps1", source)
         self.assertIn("-PairingId $PairingId", source)
+        self.assertIn("[switch]$DryRun", source)
+        self.assertIn("-DryRun:$DryRun", source)
         self.assertNotIn("ExecutionPolicy Bypass", source)
 
     def test_controller_publishes_only_an_expiring_public_key_on_temporary_branch(self):
