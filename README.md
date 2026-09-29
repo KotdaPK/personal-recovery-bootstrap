@@ -82,6 +82,56 @@ If PowerShell policy blocks the reviewed downloaded file, do not weaken policy
 with `ExecutionPolicy Bypass`. Review the file/hash again, then use your
 organization's approved code-signing or file-unblocking process.
 
+## Acceptance SSH control plane (clean Windows target)
+
+`-AcceptanceHarness` is an explicit, temporary **test-control-plane** setup. It
+is separate from ordinary recovery: it does not clone `personal-infra` or invoke
+`bootstrap.ps1 -Apply`. A remote acceptance controller can use the printed SSH
+target and later invoke ordinary recovery deliberately.
+
+1. Review the launcher revision and controller public key, then run from an
+   interactive PowerShell window. UAC elevation is requested automatically:
+
+   ```powershell
+   powershell.exe -NoProfile -File .\Start-PersonalInfraRecovery.ps1 `
+     -AcceptanceHarness -ControllerPublicKey 'ssh-ed25519 AAAA... controller'
+   ```
+
+   If `-ControllerPublicKey` is omitted, the launcher prompts for exactly one
+   structurally valid `ssh-ed25519`, ECDSA, or RSA OpenSSH public key. It never
+   accepts, prints, or stores a private key.
+
+2. The setup installs Windows OpenSSH Server only if absent, sets `sshd` to
+   Automatic, starts it, verifies its effective configuration and TCP/22
+   listener, adds only the `PersonalRecovery Acceptance OpenSSH` private-profile
+   firewall rule, and prints:
+
+   ```text
+   ACCEPTANCE_TARGET_READY
+   LAN_IP=<address>
+   HOSTNAME=<hostname>
+   WINDOWS_USER=<user>
+   SSH_TARGET=<user>@<address>
+   ```
+
+   It selects a routable LAN IPv4 address from default-route and physical
+   interface data; it refuses to guess when no eligible address exists. It adds
+   one uniquely marked public-key line, preserves all existing authorized keys,
+   uses `administrators_authorized_keys` only when effective `sshd` configuration
+   selects it for the elevated account, and applies restrictive supported ACLs.
+   Nonsecret readiness/checkpoint data is written to
+   `C:\ProgramData\PersonalRecovery\acceptance-target.json` and survives a
+   reboot; OpenSSH remains configured for automatic start.
+
+3. Setup intentionally remains enabled. When the acceptance run is complete,
+   remove only its marked key, status/checkpoint files, and firewall rule:
+
+   ```powershell
+   powershell.exe -NoProfile -File .\Start-PersonalInfraRecovery.ps1 -RemoveAcceptanceHarness
+   ```
+
+   Removal does **not** uninstall OpenSSH Server or stop `sshd`.
+
 ## What the interactive path does
 
 1. Confirms Windows.

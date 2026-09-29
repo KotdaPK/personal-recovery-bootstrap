@@ -83,6 +83,58 @@ class LauncherContractTests(unittest.TestCase):
         for pattern in forbidden:
             self.assertIsNone(re.search(pattern, self.source), pattern)
 
+    def test_declares_acceptance_control_plane_parameters(self):
+        self.assertRegex(self.source, r"\[switch\]\$AcceptanceHarness")
+        self.assertRegex(self.source, r"\[string\]\$ControllerPublicKey")
+        self.assertRegex(self.source, r"\[switch\]\$RemoveAcceptanceHarness")
+
+    def test_acceptance_path_is_separate_from_ordinary_recovery_and_dry_run(self):
+        flow = self.source[self.source.index("# Execution"):]
+        self.assertLess(flow.index("if ($RemoveAcceptanceHarness)"), flow.index("if ($AcceptanceHarness)"))
+        self.assertLess(flow.index("if ($AcceptanceHarness)"), flow.index("if ($DryRun)"))
+        self.assertIn("Acceptance harness mode does not invoke ordinary recovery", self.source)
+
+    def test_acceptance_harness_is_uac_elevated_and_installs_openssh_server(self):
+        self.assertIn("Start-Process", self.source)
+        self.assertIn("-Verb RunAs", self.source)
+        self.assertIn("OpenSSH.Server~~~~0.0.1.0", self.source)
+        self.assertIn("Add-WindowsCapability", self.source)
+        self.assertIn("Set-Service -Name 'sshd' -StartupType Automatic", self.source)
+        self.assertIn("Start-Service -Name 'sshd'", self.source)
+
+    def test_acceptance_harness_validates_a_single_safe_public_key(self):
+        self.assertIn("Assert-ControllerPublicKey", self.source)
+        self.assertRegex(self.source, r"ssh-(ed25519|ecdsa|rsa)")
+        self.assertIn("one-line OpenSSH public key", self.source)
+        self.assertIn("Read-Host", self.source)
+
+    def test_acceptance_harness_uses_marked_key_and_targeted_cleanup(self):
+        self.assertIn("personal-recovery-acceptance", self.source)
+        self.assertIn("administrators_authorized_keys", self.source)
+        self.assertIn("authorized_keys", self.source)
+        self.assertIn("Remove-AcceptanceHarness", self.source)
+        self.assertIn("Remove-NetFirewallRule", self.source)
+        self.assertIn("PersonalRecovery Acceptance OpenSSH", self.source)
+
+    def test_acceptance_harness_has_config_acl_network_and_status_contracts(self):
+        for required in (
+            "sshd -T",
+            "icacls",
+            "Get-NetRoute",
+            "Get-NetIPAddress",
+            "Get-NetTCPConnection",
+            "acceptance-target.json",
+            "PersonalRecovery",
+            "LAN_IP=",
+            "HOSTNAME=",
+            "WINDOWS_USER=",
+            "test-control-plane",
+        ):
+            self.assertIn(required, self.source)
+
+    def test_acceptance_harness_never_embeds_a_private_key(self):
+        self.assertNotRegex(self.source, r"-----BEGIN (?:OPENSSH |RSA |EC )?PRIVATE KEY-----")
+
 
 if __name__ == "__main__":
     unittest.main()

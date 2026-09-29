@@ -29,4 +29,37 @@ Describe 'Start-PersonalInfraRecovery' {
         $source | Should Not Match 'github_pat_[A-Za-z0-9_]+'
         $source | Should Not Match '(?i)(github|gh|api)[-_ ]?token\s*='
     }
+
+    It 'ships acceptance setup and targeted removal public parameters' {
+        $source = Get-Content -Raw $launcher
+        $source | Should Match '\[switch\]\$AcceptanceHarness'
+        $source | Should Match '\[string\]\$ControllerPublicKey'
+        $source | Should Match '\[switch\]\$RemoveAcceptanceHarness'
+    }
+
+    It 'keeps acceptance control plane separate from ordinary recovery' {
+        $source = Get-Content -Raw $launcher
+        $source | Should Match 'Acceptance harness mode does not invoke ordinary recovery'
+        $source.IndexOf('if ($AcceptanceHarness)') | Should BeLessThan $source.IndexOf('if ($DryRun)')
+    }
+
+    It 'contains UAC, OpenSSH, firewall, status, and cleanup contracts' {
+        $source = Get-Content -Raw $launcher
+        $source | Should Match '-Verb RunAs'
+        $source | Should Match 'OpenSSH\.Server~~~~0\.0\.1\.0'
+        $source | Should Match "Set-Service -Name 'sshd' -StartupType Automatic"
+        $source | Should Match 'sshd -T'
+        $source | Should Match 'PersonalRecovery Acceptance OpenSSH'
+        $source | Should Match 'acceptance-target\.json'
+        $source | Should Match 'Remove-AcceptanceHarness'
+    }
+
+    It 'contains validated marked acceptance-key and ACL handling' {
+        $source = Get-Content -Raw $launcher
+        $source | Should Match 'Assert-ControllerPublicKey'
+        $source | Should Match 'ssh-(ed25519|ecdsa|rsa)'
+        $source | Should Match 'personal-recovery-acceptance'
+        $source | Should Match 'administrators_authorized_keys'
+        $source | Should Match 'icacls'
+    }
 }
