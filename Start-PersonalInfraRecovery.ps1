@@ -441,12 +441,16 @@ function Install-AcceptanceExpiryCleanup {
     [ordered]@{ key_path = $KeyPath; expires_utc = $Expires.ToUniversalTime().ToString('o') } |
         ConvertTo-Json | Set-Content -LiteralPath $AcceptanceCleanupStatePath -Encoding utf8
     $cleanupSource = @'
+[CmdletBinding()]
+param([switch]$Force)
 $ErrorActionPreference = 'Stop'
 $stateDirectory = Join-Path $env:ProgramData 'PersonalRecovery'
 $statePath = Join-Path $stateDirectory 'acceptance-cleanup.json'
 $marker = 'personal-recovery-acceptance'
 if (Test-Path -LiteralPath $statePath) {
     $state = Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json
+    try { $expiresUtc = [DateTimeOffset]::Parse([string]$state.expires_utc).ToUniversalTime() } catch { throw 'Acceptance cleanup expiry is invalid.' }
+    if (-not $Force -and [DateTimeOffset]::UtcNow -lt $expiresUtc) { exit 0 }
     if ($state.key_path -and (Test-Path -LiteralPath $state.key_path)) {
         $remaining = @(Get-Content -LiteralPath $state.key_path | Where-Object { $_ -notmatch ('\s' + [regex]::Escape($marker) + '$') })
         [IO.File]::WriteAllLines([string]$state.key_path, [string[]]$remaining, [Text.Encoding]::ASCII)
@@ -468,7 +472,8 @@ Remove-Item -LiteralPath $MyInvocation.MyCommand.Path -Force -ErrorAction Silent
     if ($LASTEXITCODE -ne 0) { throw 'Could not protect acceptance cleanup script.' }
     $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument "-NoProfile -NonInteractive -File `"$AcceptanceCleanupScriptPath`""
     $trigger = New-ScheduledTaskTrigger -Once -At $Expires.LocalDateTime
-    Register-ScheduledTask -TaskName $AcceptanceCleanupTaskName -Action $action -Trigger $trigger -User 'SYSTEM' -RunLevel Highest -Force | Out-Null
+    $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable
+    Register-ScheduledTask -TaskName $AcceptanceCleanupTaskName -Action $action -Trigger $trigger -Settings $settings -User 'SYSTEM' -RunLevel Highest -Force | Out-Null
 }
 
 function Write-AcceptanceStatus {
@@ -538,7 +543,7 @@ function Invoke-AcceptanceHarness {
 
 function Remove-AcceptanceHarness {
     if (Test-Path -LiteralPath $AcceptanceCleanupScriptPath -PathType Leaf) {
-        & $AcceptanceCleanupScriptPath
+        & $AcceptanceCleanupScriptPath -Force
         if (-not $?) { throw 'Acceptance cleanup script reported failure.' }
         Write-Host 'Acceptance harness state removed. OpenSSH Server remains installed and unchanged.'
         return

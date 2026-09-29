@@ -125,7 +125,9 @@ confirmed. The private key never leaves the old laptop.
    invokes the canonical `-AcceptanceHarness` path. Approve the normal UAC
    prompt. The target installs a SYSTEM expiry task that removes only the marked
    key, acceptance firewall rule, and acceptance metadata if the controller
-   never reaches cleanup.
+   never reaches cleanup. The task is configured to start when next available
+   after a missed expiry (including sleep or power-off), and its cleanup action
+   verifies the recorded UTC expiry before removing access.
 
 3. When the new laptop prints `REMOTE ACCEPTANCE TARGET READY`, paste its exact
    `WindowsUser@LAN-IP` value into the old laptop's waiting prompt. The old
