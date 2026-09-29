@@ -54,7 +54,7 @@ function Remove-PairingBranch {
     param([Parameter(Mandatory = $true)][string]$Branch)
     for ($attempt = 1; $attempt -le 3; $attempt++) {
         & wsl.exe -- gh api --method DELETE "repos/$Repository/git/refs/heads/$Branch" 2>$null
-        $refsJson = (& wsl.exe -- gh api "repos/$Repository/git/matching-refs/heads/acceptance-pairing-" 2>$null) -join "`n"
+        $refsJson = (& wsl.exe -- gh api "repos/$Repository/git/matching-refs/heads" 2>$null) -join "`n"
         if ($LASTEXITCODE -eq 0) {
             try { $remaining = @($refsJson | ConvertFrom-Json | Where-Object { $_.ref -ceq "refs/heads/$Branch" }).Count } catch { $remaining = -1 }
             if ($remaining -eq 0) { return $true }
