@@ -14,7 +14,7 @@ Describe 'Start-PersonalInfraRecovery' {
         $source | Should Match 'https://github\.com/KotdaPK/personal-infra\.git'
         $source | Should Match 'bootstrap\.ps1'
         $source | Should Match '-Apply'
-        $source | Should Match '2928b9aaa20065d218d52e3d1ea2db185c0a6afe'
+        $source | Should Match '44faff0de1156e170843574d4eafd149d28f10e4'
     }
 
     It 'fails closed for a nonempty destination' {

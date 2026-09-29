@@ -21,7 +21,7 @@ class LauncherContractTests(unittest.TestCase):
         self.assertRegex(self.source, r"bootstrap\.ps1")
         self.assertRegex(self.source, r"-Apply")
         self.assertIn("-Distro $Distro", self.source)
-        self.assertIn("2928b9aaa20065d218d52e3d1ea2db185c0a6afe", self.source)
+        self.assertIn("44faff0de1156e170843574d4eafd149d28f10e4", self.source)
 
     def test_preflights_windows_before_external_tools(self):
         flow = self.source[self.source.index("# Execution"):]
