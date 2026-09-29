@@ -21,7 +21,7 @@ class LauncherContractTests(unittest.TestCase):
         self.assertRegex(self.source, r"bootstrap\.ps1")
         self.assertRegex(self.source, r"-Apply")
         self.assertIn("-Distro $Distro", self.source)
-        self.assertIn("0a2d7d340e48c32f383333129cc189c97eab5d33", self.source)
+        self.assertIn("acd835bbe1a06fbdc26bcd23084b11f1079105bb", self.source)
 
     def test_preflights_windows_before_external_tools(self):
         flow = self.source[self.source.index("# Execution"):]
@@ -134,6 +134,70 @@ class LauncherContractTests(unittest.TestCase):
 
     def test_acceptance_harness_never_embeds_a_private_key(self):
         self.assertNotRegex(self.source, r"-----BEGIN (?:OPENSSH |RSA |EC )?PRIVATE KEY-----")
+
+    def test_acceptance_target_ready_banner_and_status_are_concise_and_nonsecret(self):
+        for field in (
+            "REMOTE ACCEPTANCE TARGET READY",
+            "Hostname:",
+            "Windows user:",
+            "LAN IP:",
+            "SSH port:          22",
+            "sshd running:      YES",
+            "sshd auto-start:   YES",
+            "Firewall rule:     READY",
+            "Controller key:    INSTALLED",
+            "Controller target:",
+            "Waiting for acceptance controller...",
+            "LAN_IP=",
+            "HOSTNAME=",
+            "WINDOWS_USER=",
+        ):
+            self.assertIn(field, self.source)
+        status_function = self.source[self.source.index("function Write-AcceptanceStatus"):self.source.index("function Invoke-AcceptanceHarness")]
+        for field in (
+            "hostname",
+            "windows_user",
+            "lan_ip",
+            "ssh_port",
+            "sshd_ready",
+            "controller_key_installed",
+            "launcher_path = $PSCommandPath",
+            "recovery_destination = $Destination",
+            "distro = $Distro",
+            "TEST CONTROL PLANE",
+        ):
+            self.assertIn(field, status_function)
+        self.assertNotIn("authorized_keys_path", status_function)
+        self.assertNotIn("checkpoint =", status_function)
+
+    def test_acceptance_key_selection_is_user_specific_and_firewall_is_lan_safe(self):
+        self.assertIn("sshd.exe -T -C $connection", self.source)
+        self.assertIn("user=$Account,host=$env:COMPUTERNAME,addr=127.0.0.1", self.source)
+        self.assertIn("Get-LocalGroupMember -SID 'S-1-5-32-544'", self.source)
+        self.assertIn("Elevation changed the invoking account or profile", self.source)
+        self.assertIn("-AcceptanceTargetUserProfile", self.source)
+        self.assertIn("-Profile Any -RemoteAddress LocalSubnet", self.source)
+        self.assertIn("Get-NetFirewallAddressFilter", self.source)
+        firewall_function = self.source[self.source.index("function Ensure-AcceptanceFirewallRule"):self.source.index("function Write-AcceptanceStatus")]
+        self.assertNotIn("Set-NetFirewallRule", firewall_function)
+        self.assertIn("refusing to repurpose", firewall_function)
+        removal = self.source[self.source.index("function Remove-AcceptanceHarness"):self.source.index("# Execution")]
+        self.assertIn("acceptance-recovery-checkpoint.json", self.source)
+        self.assertIn("$AcceptanceRecoveryCheckpointPath", removal)
+
+    def test_acceptance_resume_reuses_only_the_verified_immutable_checkout(self):
+        self.assertIn("[switch]$AcceptanceResume", self.source)
+        resume = self.source[self.source.index("function Get-AcceptanceRecoveryCheckout"):self.source.index("# Acceptance harness mode")]
+        self.assertIn("Assert-VerifiedCheckout -Path $Destination", resume)
+        self.assertIn("Clone-CanonicalRepository -Path $Destination", resume)
+        flow = self.source[self.source.index("# Execution"):]
+        self.assertIn("if ($AcceptanceResume)", flow)
+        self.assertIn("Assert-AcceptanceResumeContext", flow)
+        context = self.source[self.source.index("function Assert-AcceptanceResumeContext"):self.source.index("# Acceptance harness mode")]
+        self.assertIn("created by -AcceptanceHarness", context)
+        self.assertIn("launcher_path", context)
+        self.assertIn("recovery_destination", context)
+        self.assertIn("OrdinalIgnoreCase", context)
 
 
 if __name__ == "__main__":

@@ -103,15 +103,25 @@ target and later invoke ordinary recovery deliberately.
 
 2. The setup installs Windows OpenSSH Server only if absent, sets `sshd` to
    Automatic, starts it, verifies its effective configuration and TCP/22
-   listener, adds only the `PersonalRecovery Acceptance OpenSSH` private-profile
-   firewall rule, and prints:
+   listener, adds only the `PersonalRecovery Acceptance OpenSSH` LAN-scoped
+   (`LocalSubnet`) firewall rule, and prints a target-ready block containing:
 
    ```text
-   ACCEPTANCE_TARGET_READY
+   REMOTE ACCEPTANCE TARGET READY
+   Hostname:          <hostname>
+   Windows user:      <user>
+   LAN IP:            <address>
+   SSH port:          22
+   sshd running:      YES
+   sshd auto-start:   YES
+   Firewall rule:     READY
+   Controller key:    INSTALLED
+   Controller target:
+   <user>@<address>
+   Waiting for acceptance controller...
    LAN_IP=<address>
    HOSTNAME=<hostname>
    WINDOWS_USER=<user>
-   SSH_TARGET=<user>@<address>
    ```
 
    It selects a routable LAN IPv4 address from default-route and physical
@@ -119,11 +129,27 @@ target and later invoke ordinary recovery deliberately.
    one uniquely marked public-key line, preserves all existing authorized keys,
    uses `administrators_authorized_keys` only when effective `sshd` configuration
    selects it for the elevated account, and applies restrictive supported ACLs.
-   Nonsecret readiness/checkpoint data is written to
+   Nonsecret readiness metadata is written to
    `C:\ProgramData\PersonalRecovery\acceptance-target.json` and survives a
    reboot; OpenSSH remains configured for automatic start.
 
-3. Setup intentionally remains enabled. When the acceptance run is complete,
+3. From the old/current laptop's reviewed `personal-infra` checkout, invoke the
+   checkpoint-aware controller using the exact target printed above:
+
+   ```bash
+   ./acceptance/prepare-controller.sh --clipboard
+   ./acceptance/run-controller.sh <user>@<address>
+   ./acceptance/collect-evidence.sh <user>@<address>
+   ```
+
+   The controller uses an isolated key and `known_hosts`, verifies Windows,
+   account, administrative privileges, and immutable target metadata, then
+   invokes this public launcher with its acceptance-only resume interface. It
+   reconnects after a supported WSL restart and does not rerun completed or
+   failed recovery blindly. The user still completes unavoidable official
+   provider/browser/device authentication prompts.
+
+4. Setup intentionally remains enabled. When the acceptance run is complete,
    remove only its marked key, status/checkpoint files, and firewall rule:
 
    ```powershell

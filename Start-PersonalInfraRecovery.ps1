@@ -26,14 +26,31 @@ param(
     [string]$ControllerPublicKey,
 
     [Parameter()]
-    [switch]$RemoveAcceptanceHarness
+    [switch]$RemoveAcceptanceHarness,
+
+    [Parameter(DontShow = $true)]
+    [switch]$AcceptanceResume,
+
+    # Internal UAC forwarding values. They are verified after elevation and are
+    # not an alternate account-selection interface.
+    [Parameter(DontShow = $true)]
+    [string]$AcceptanceTargetAccount,
+
+    [Parameter(DontShow = $true)]
+    [string]$AcceptanceTargetUserProfile,
+
+    [Parameter(DontShow = $true)]
+    [string]$AcceptanceTargetSid,
+
+    [Parameter(DontShow = $true)]
+    [string]$AcceptanceTargetUserName
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 $ExpectedOrigin = 'https://github.com/KotdaPK/personal-infra.git'
-$ExpectedPersonalInfraCommit = '0a2d7d340e48c32f383333129cc189c97eab5d33'
+$ExpectedPersonalInfraCommit = 'acd835bbe1a06fbdc26bcd23084b11f1079105bb'
 
 function Assert-WindowsHost {
     if ($env:OS -ne 'Windows_NT') {
@@ -200,6 +217,38 @@ function Invoke-CanonicalBootstrap {
     }
 }
 
+function Get-AcceptanceRecoveryCheckout {
+    if (Test-Path -LiteralPath $Destination) {
+        Assert-VerifiedCheckout -Path $Destination
+        return $Destination
+    }
+    Assert-EmptyDestination -Path $Destination
+    Install-Git
+    Install-GitHubCli
+    Ensure-GitHubAuthentication
+    Configure-GitHubGitCredential
+    Assert-NoGitUrlRewrite
+    Clone-CanonicalRepository -Path $Destination
+    Assert-VerifiedCheckout -Path $Destination
+    return $Destination
+}
+
+function Assert-AcceptanceResumeContext {
+    if (-not (Test-Path -LiteralPath $AcceptanceTargetPath -PathType Leaf)) {
+        throw 'Acceptance resume requires target metadata created by -AcceptanceHarness.'
+    }
+    $metadata = Get-Content -LiteralPath $AcceptanceTargetPath -Raw | ConvertFrom-Json
+    $expectedLauncher = [IO.Path]::GetFullPath($PSCommandPath)
+    $recordedLauncher = [IO.Path]::GetFullPath([string]$metadata.launcher_path)
+    $expectedDestination = [IO.Path]::GetFullPath($Destination)
+    $recordedDestination = [IO.Path]::GetFullPath([string]$metadata.recovery_destination)
+    if (-not [string]::Equals($recordedLauncher, $expectedLauncher, [StringComparison]::OrdinalIgnoreCase) -or
+        -not [string]::Equals($recordedDestination, $expectedDestination, [StringComparison]::OrdinalIgnoreCase) -or
+        [string]$metadata.distro -cne $Distro) {
+        throw 'Acceptance resume arguments do not match the immutable target metadata.'
+    }
+}
+
 # Acceptance harness mode does not invoke ordinary recovery; a remote controller
 # invokes that flow later.
 $AcceptanceRuleName = 'PersonalRecovery-Acceptance-OpenSSH'
@@ -208,6 +257,7 @@ $AcceptanceMarker = 'personal-recovery-acceptance'
 $AcceptanceStateDirectory = Join-Path $env:ProgramData 'PersonalRecovery'
 $AcceptanceTargetPath = Join-Path $AcceptanceStateDirectory 'acceptance-target.json'
 $AcceptanceCheckpointPath = Join-Path $AcceptanceStateDirectory 'acceptance-checkpoint.json'
+$AcceptanceRecoveryCheckpointPath = Join-Path $AcceptanceStateDirectory 'acceptance-recovery-checkpoint.json'
 
 function Test-IsAdministrator {
     $principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
@@ -220,6 +270,14 @@ function ConvertTo-ProcessArgument {
 }
 
 function Ensure-AcceptanceElevation {
+    $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+    if (-not $AcceptanceTargetAccount) { $script:AcceptanceTargetAccount = $identity.Name }
+    if (-not $AcceptanceTargetUserProfile) { $script:AcceptanceTargetUserProfile = $env:USERPROFILE }
+    if (-not $AcceptanceTargetSid) { $script:AcceptanceTargetSid = $identity.User.Value }
+    if (-not $AcceptanceTargetUserName) { $script:AcceptanceTargetUserName = $env:USERNAME }
+    if ($identity.Name -cne $AcceptanceTargetAccount -or $identity.User.Value -cne $AcceptanceTargetSid -or $env:USERPROFILE -cne $AcceptanceTargetUserProfile) {
+        throw 'Elevation changed the invoking account or profile; refusing to install an acceptance key for an unexpected identity.'
+    }
     if (Test-IsAdministrator) { return }
     $forwarded = @('-NoProfile', '-ExecutionPolicy', 'RemoteSigned', '-File', (ConvertTo-ProcessArgument $PSCommandPath))
     if ($AcceptanceHarness) {
@@ -227,6 +285,12 @@ function Ensure-AcceptanceElevation {
         if ($ControllerPublicKey) { $forwarded += @('-ControllerPublicKey', (ConvertTo-ProcessArgument $ControllerPublicKey)) }
     }
     if ($RemoveAcceptanceHarness) { $forwarded += '-RemoveAcceptanceHarness' }
+    $forwarded += @(
+        '-AcceptanceTargetAccount', (ConvertTo-ProcessArgument $AcceptanceTargetAccount),
+        '-AcceptanceTargetUserProfile', (ConvertTo-ProcessArgument $AcceptanceTargetUserProfile),
+        '-AcceptanceTargetSid', (ConvertTo-ProcessArgument $AcceptanceTargetSid),
+        '-AcceptanceTargetUserName', (ConvertTo-ProcessArgument $AcceptanceTargetUserName)
+    )
     $process = Start-Process -FilePath 'powershell.exe' -Verb RunAs -Wait -PassThru -ArgumentList ($forwarded -join ' ')
     exit $process.ExitCode
 }
@@ -252,45 +316,72 @@ function Ensure-OpenSshServer {
     if ($service.Status -ne 'Running') { Start-Service -Name 'sshd' }
 }
 
+function Test-SelectedAccountInAdministrators {
+    param([Parameter(Mandatory = $true)][string]$Sid)
+    try {
+        $members = @(Get-LocalGroupMember -SID 'S-1-5-32-544' -ErrorAction Stop)
+    } catch {
+        throw 'Could not determine whether the selected account belongs to the local Administrators group.'
+    }
+    return @($members | Where-Object { $_.SID -and $_.SID.Value -ceq $Sid }).Count -eq 1
+}
+
 function Get-EffectiveSshdConfig {
-    $config = @(& sshd.exe -T 2>$null)
-    if ($LASTEXITCODE -ne 0 -or $config.Count -eq 0) { throw 'Could not verify effective sshd configuration with sshd -T.' }
+    param([Parameter(Mandatory = $true)][string]$Account)
+    $connection = "user=$Account,host=$env:COMPUTERNAME,addr=127.0.0.1"
+    $config = @(& sshd.exe -T -C $connection 2>$null)
+    if ($LASTEXITCODE -ne 0 -or $config.Count -eq 0) { throw 'Could not verify effective sshd configuration for the selected user with sshd -T -C.' }
     $config
 }
 
 function Get-AcceptanceAuthorizedKeysPath {
-    param([Parameter(Mandatory = $true)][string[]]$EffectiveConfig)
+    param(
+        [Parameter(Mandatory = $true)][string[]]$EffectiveConfig,
+        [Parameter(Mandatory = $true)][bool]$SelectedAccountIsAdministrator,
+        [Parameter(Mandatory = $true)][string]$UserProfile
+    )
     $adminConfig = @($EffectiveConfig | Where-Object { $_ -match '(?i)^authorizedkeysfile\s+.*administrators_authorized_keys' })
-    if ((Test-IsAdministrator) -and $adminConfig.Count -gt 0) { return (Join-Path $env:ProgramData 'ssh\administrators_authorized_keys') }
-    Join-Path $env:USERPROFILE '.ssh\authorized_keys'
+    if ($SelectedAccountIsAdministrator -and $adminConfig.Count -gt 0) { return (Join-Path $env:ProgramData 'ssh\administrators_authorized_keys') }
+    Join-Path $UserProfile '.ssh\authorized_keys'
 }
 
 function Set-AcceptanceAuthorizedKeysAcl {
-    param([Parameter(Mandatory = $true)][string]$Path, [Parameter(Mandatory = $true)][bool]$AdministratorFile)
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][bool]$AdministratorFile,
+        [Parameter(Mandatory = $true)][string]$Account
+    )
     if ($AdministratorFile) {
         & icacls.exe $Path /inheritance:r /grant:r 'SYSTEM:(F)' /grant:r 'Administrators:(F)' | Out-Null
     } else {
-        & icacls.exe $Path /inheritance:r /grant:r "$env:USERNAME`:(F)" /grant:r 'SYSTEM:(F)' | Out-Null
+        & icacls.exe $Path /inheritance:r /grant:r "$Account`:(F)" /grant:r 'SYSTEM:(F)' | Out-Null
     }
     if ($LASTEXITCODE -ne 0) { throw "Could not apply supported restrictive ACLs to $Path." }
+    $acl = Get-Acl -LiteralPath $Path
+    if (-not $acl.AreAccessRulesProtected) { throw "Authorized-keys ACL inheritance remains enabled for $Path." }
 }
 
 function Add-AcceptanceAuthorizedKey {
-    param([Parameter(Mandatory = $true)][string]$Path, [Parameter(Mandatory = $true)][string]$Key)
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][string]$Key,
+        [Parameter(Mandatory = $true)][string]$Account
+    )
     $directory = Split-Path -Parent $Path
     if (-not (Test-Path -LiteralPath $directory)) { New-Item -ItemType Directory -Path $directory -Force | Out-Null }
     if (-not (Test-Path -LiteralPath $Path)) { New-Item -ItemType File -Path $Path -Force | Out-Null }
     $marked = "$Key $AcceptanceMarker"
     if (@(Get-Content -LiteralPath $Path) -notcontains $marked) { Add-Content -LiteralPath $Path -Value $marked -Encoding ascii }
-    Set-AcceptanceAuthorizedKeysAcl -Path $Path -AdministratorFile ($Path -match '(?i)administrators_authorized_keys$')
+    Set-AcceptanceAuthorizedKeysAcl -Path $Path -AdministratorFile ($Path -match '(?i)administrators_authorized_keys$') -Account $Account
+    if (@(Get-Content -LiteralPath $Path) -notcontains $marked) { throw "Controller key was not installed at $Path." }
 }
 
 function Remove-AcceptanceAuthorizedKey {
-    param([Parameter(Mandatory = $true)][string]$Path)
+    param([Parameter(Mandatory = $true)][string]$Path, [Parameter(Mandatory = $true)][string]$Account)
     if (-not (Test-Path -LiteralPath $Path)) { return }
     $remaining = @(Get-Content -LiteralPath $Path | Where-Object { $_ -notmatch ('\s' + [regex]::Escape($AcceptanceMarker) + '$') })
     [IO.File]::WriteAllLines($Path, [string[]]$remaining, [Text.Encoding]::ASCII)
-    Set-AcceptanceAuthorizedKeysAcl -Path $Path -AdministratorFile ($Path -match '(?i)administrators_authorized_keys$')
+    Set-AcceptanceAuthorizedKeysAcl -Path $Path -AdministratorFile ($Path -match '(?i)administrators_authorized_keys$') -Account $Account
 }
 
 function Get-AcceptanceLanAddress {
@@ -308,49 +399,77 @@ function Get-AcceptanceLanAddress {
 }
 
 function Ensure-AcceptanceFirewallRule {
-    $rule = Get-NetFirewallRule -Name $AcceptanceRuleName -ErrorAction SilentlyContinue
-    if (-not $rule) {
-        New-NetFirewallRule -Name $AcceptanceRuleName -DisplayName $AcceptanceRuleDisplayName -Direction Inbound -Action Allow -Protocol TCP -LocalPort 22 -Profile Private | Out-Null
-        return
+    $rules = @(Get-NetFirewallRule -Name $AcceptanceRuleName -ErrorAction SilentlyContinue)
+    if ($rules.Count -eq 0) {
+        New-NetFirewallRule -Name $AcceptanceRuleName -DisplayName $AcceptanceRuleDisplayName -Direction Inbound -Action Allow -Protocol TCP -LocalPort 22 -Profile Any -RemoteAddress LocalSubnet | Out-Null
+        $rules = @(Get-NetFirewallRule -Name $AcceptanceRuleName -ErrorAction Stop)
     }
-    $portFilter = Get-NetFirewallPortFilter -AssociatedNetFirewallRule $rule
-    if ($rule.Direction -eq 'Inbound' -and $rule.Action -eq 'Allow' -and $rule.Enabled -eq 'True' -and $rule.Profile -eq 'Private' -and $portFilter.Protocol -eq 'TCP' -and $portFilter.LocalPort -eq '22') { return }
-    Set-NetFirewallRule -Name $AcceptanceRuleName -DisplayName $AcceptanceRuleDisplayName -Direction Inbound -Action Allow -Enabled True -Profile Private | Out-Null
-    Set-NetFirewallPortFilter -AssociatedNetFirewallRule $rule -Protocol TCP -LocalPort 22 | Out-Null
+    if ($rules.Count -ne 1) { throw 'The named acceptance firewall rule is ambiguous; refusing to repurpose it.' }
+    $rule = $rules[0]
+    $portFilter = @(Get-NetFirewallPortFilter -AssociatedNetFirewallRule $rule)
+    $addressFilter = @(Get-NetFirewallAddressFilter -AssociatedNetFirewallRule $rule)
+    $remoteAddresses = @($addressFilter | ForEach-Object { $_.RemoteAddress })
+    if ($rule.DisplayName -cne $AcceptanceRuleDisplayName -or $rule.Direction -ne 'Inbound' -or $rule.Action -ne 'Allow' -or $rule.Enabled -ne 'True' -or $rule.Profile -ne 'Any' -or $portFilter.Count -ne 1 -or $portFilter[0].Protocol -ne 'TCP' -or $portFilter[0].LocalPort -ne '22' -or $remoteAddresses -notcontains 'LocalSubnet') {
+        throw 'A named acceptance firewall rule already exists with different settings; refusing to repurpose it.'
+    }
 }
 
 function Write-AcceptanceStatus {
-    param([Parameter(Mandatory = $true)][string]$LanIp, [Parameter(Mandatory = $true)][string]$KeyPath)
+    param(
+        [Parameter(Mandatory = $true)][string]$LanIp,
+        [Parameter(Mandatory = $true)][string]$Account,
+        [Parameter(Mandatory = $true)][bool]$SshdReady,
+        [Parameter(Mandatory = $true)][bool]$ControllerKeyInstalled
+    )
     if (-not (Test-Path -LiteralPath $AcceptanceStateDirectory)) { New-Item -ItemType Directory -Path $AcceptanceStateDirectory -Force | Out-Null }
-    $status = [ordered]@{ disclaimer = 'test-control-plane only; no ordinary recovery was invoked and no private key is stored.'; hostname = $env:COMPUTERNAME; windows_user = $env:USERNAME; lan_ip = $LanIp; ssh_port = 22; authorized_keys_path = $KeyPath; checkpoint = 'acceptance-ready' }
+    $status = [ordered]@{ disclaimer = 'TEST CONTROL PLANE (test-control-plane) ONLY; no ordinary recovery was invoked and no private key is stored.'; hostname = $env:COMPUTERNAME; windows_user = $Account; lan_ip = $LanIp; ssh_port = 22; sshd_ready = $SshdReady; controller_key_installed = $ControllerKeyInstalled; launcher_path = $PSCommandPath; recovery_destination = $Destination; distro = $Distro }
     $status | ConvertTo-Json | Set-Content -LiteralPath $AcceptanceTargetPath -Encoding utf8
-    $status | ConvertTo-Json | Set-Content -LiteralPath $AcceptanceCheckpointPath -Encoding utf8
 }
 
 function Invoke-AcceptanceHarness {
     if (-not $ControllerPublicKey) { $script:ControllerPublicKey = Read-Host 'Paste one controller OpenSSH public key' }
     Assert-ControllerPublicKey -Key $ControllerPublicKey
     Ensure-OpenSshServer
-    $keyPath = Get-AcceptanceAuthorizedKeysPath -EffectiveConfig (Get-EffectiveSshdConfig)
-    Add-AcceptanceAuthorizedKey -Path $keyPath -Key $ControllerPublicKey
+    $selectedAccountIsAdministrator = Test-SelectedAccountInAdministrators -Sid $AcceptanceTargetSid
+    $effectiveConfig = Get-EffectiveSshdConfig -Account $AcceptanceTargetUserName
+    $keyPath = Get-AcceptanceAuthorizedKeysPath -EffectiveConfig $effectiveConfig -SelectedAccountIsAdministrator $selectedAccountIsAdministrator -UserProfile $AcceptanceTargetUserProfile
+    Add-AcceptanceAuthorizedKey -Path $keyPath -Key $ControllerPublicKey -Account $AcceptanceTargetAccount
     Ensure-AcceptanceFirewallRule
     $lanIp = Get-AcceptanceLanAddress
     if (-not (Get-NetTCPConnection -LocalPort 22 -State Listen -ErrorAction SilentlyContinue)) { throw 'sshd is not listening on TCP port 22.' }
-    Write-AcceptanceStatus -LanIp $lanIp -KeyPath $keyPath
-    Write-Host 'ACCEPTANCE_TARGET_READY'
+    $sshd = Get-Service -Name 'sshd' -ErrorAction Stop
+    if ($sshd.Status -ne 'Running' -or $sshd.StartType -ne 'Automatic') { throw 'sshd is not running with automatic startup.' }
+    Write-AcceptanceStatus -LanIp $lanIp -Account $AcceptanceTargetUserName -SshdReady $true -ControllerKeyInstalled $true
+    Write-Host '========================================================'
+    Write-Host 'REMOTE ACCEPTANCE TARGET READY'
+    Write-Host '========================================================'
+    Write-Host ''
+    Write-Host ("Hostname:          {0}" -f $env:COMPUTERNAME)
+    Write-Host ("Windows user:      {0}" -f $AcceptanceTargetUserName)
+    Write-Host ("LAN IP:            {0}" -f $lanIp)
+    Write-Host 'SSH port:          22'
+    Write-Host 'sshd running:      YES'
+    Write-Host 'sshd auto-start:   YES'
+    Write-Host 'Firewall rule:     READY'
+    Write-Host 'Controller key:    INSTALLED'
+    Write-Host ''
+    Write-Host 'Controller target:'
+    Write-Host "$AcceptanceTargetUserName@$lanIp"
+    Write-Host ''
+    Write-Host 'Waiting for acceptance controller...'
+    Write-Host '========================================================'
     Write-Host "LAN_IP=$lanIp"
     Write-Host "HOSTNAME=$env:COMPUTERNAME"
-    Write-Host "WINDOWS_USER=$env:USERNAME"
-    Write-Host "SSH_TARGET=$env:USERNAME@$lanIp"
-    Write-Host 'Acceptance setup is complete; it remains enabled until -RemoveAcceptanceHarness is run.'
+    Write-Host "WINDOWS_USER=$AcceptanceTargetUserName"
 }
 
 function Remove-AcceptanceHarness {
-    $paths = @((Join-Path $env:ProgramData 'ssh\administrators_authorized_keys'), (Join-Path $env:USERPROFILE '.ssh\authorized_keys'))
-    foreach ($path in $paths) { Remove-AcceptanceAuthorizedKey -Path $path }
+    $paths = @((Join-Path $env:ProgramData 'ssh\administrators_authorized_keys'), (Join-Path $AcceptanceTargetUserProfile '.ssh\authorized_keys'))
+    foreach ($path in $paths) { Remove-AcceptanceAuthorizedKey -Path $path -Account $AcceptanceTargetAccount }
     Remove-NetFirewallRule -Name $AcceptanceRuleName -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $AcceptanceTargetPath -Force -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $AcceptanceCheckpointPath -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $AcceptanceRecoveryCheckpointPath -Force -ErrorAction SilentlyContinue
     Write-Host 'Acceptance harness state removed. OpenSSH Server remains installed and unchanged.'
 }
 
@@ -364,6 +483,12 @@ if ($RemoveAcceptanceHarness) {
 if ($AcceptanceHarness) {
     Ensure-AcceptanceElevation
     Invoke-AcceptanceHarness
+    return
+}
+if ($AcceptanceResume) {
+    Assert-AcceptanceResumeContext
+    $target = Get-AcceptanceRecoveryCheckout
+    Invoke-CanonicalBootstrap -Path $target
     return
 }
 Assert-EmptyDestination -Path $Destination
