@@ -21,7 +21,8 @@ class LauncherContractTests(unittest.TestCase):
         self.assertRegex(self.source, r"bootstrap\.ps1")
         self.assertRegex(self.source, r"-Apply")
         self.assertIn("-Distro $Distro", self.source)
-        self.assertIn("acd835bbe1a06fbdc26bcd23084b11f1079105bb", self.source)
+        self.assertIn("5dd47f126a042425e03f439f1510f26f79f3d227", self.source)
+        self.assertIn("-WslUser $WslUser", self.source)
 
     def test_preflights_windows_before_external_tools(self):
         flow = self.source[self.source.index("# Execution"):]
@@ -164,6 +165,7 @@ class LauncherContractTests(unittest.TestCase):
             "launcher_path = $PSCommandPath",
             "recovery_destination = $Destination",
             "distro = $Distro",
+            "wsl_user = $WslUser",
             "TEST CONTROL PLANE",
         ):
             self.assertIn(field, status_function)
@@ -197,7 +199,9 @@ class LauncherContractTests(unittest.TestCase):
         self.assertIn("created by -AcceptanceHarness", context)
         self.assertIn("launcher_path", context)
         self.assertIn("recovery_destination", context)
+        self.assertIn("metadata.wsl_user", context)
         self.assertIn("OrdinalIgnoreCase", context)
+        self.assertIn("WslUser must be a safe lowercase Linux account name", self.source)
 
 
 if __name__ == "__main__":

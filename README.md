@@ -149,6 +149,10 @@ target and later invoke ordinary recovery deliberately.
    failed recovery blindly. The user still completes unavoidable official
    provider/browser/device authentication prompts.
 
+   The pinned bootstrap provisions the declared WSL account noninteractively
+   (`kotda` by default), applies the repository-owned WSL/systemd configuration,
+   and runs every Linux phase explicitly as that account.
+
 4. Setup intentionally remains enabled. When the acceptance run is complete,
    remove only its marked key, status/checkpoint files, and firewall rule:
 

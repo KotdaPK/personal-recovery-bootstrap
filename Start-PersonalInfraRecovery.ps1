@@ -17,6 +17,9 @@ param(
     [string]$Distro = 'Ubuntu-24.04',
 
     [Parameter()]
+    [string]$WslUser = 'kotda',
+
+    [Parameter()]
     [switch]$DryRun,
 
     [Parameter()]
@@ -50,7 +53,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 $ExpectedOrigin = 'https://github.com/KotdaPK/personal-infra.git'
-$ExpectedPersonalInfraCommit = 'acd835bbe1a06fbdc26bcd23084b11f1079105bb'
+$ExpectedPersonalInfraCommit = '5dd47f126a042425e03f439f1510f26f79f3d227'
 
 function Assert-WindowsHost {
     if ($env:OS -ne 'Windows_NT') {
@@ -211,7 +214,7 @@ function Invoke-CanonicalBootstrap {
     }
 
     Write-Host "Handing off to $bootstrap -Apply"
-    & $bootstrap -Apply -Distro $Distro
+    & $bootstrap -Apply -Distro $Distro -WslUser $WslUser
     if (-not $?) {
         throw 'bootstrap.ps1 -Apply reported failure.'
     }
@@ -244,7 +247,7 @@ function Assert-AcceptanceResumeContext {
     $recordedDestination = [IO.Path]::GetFullPath([string]$metadata.recovery_destination)
     if (-not [string]::Equals($recordedLauncher, $expectedLauncher, [StringComparison]::OrdinalIgnoreCase) -or
         -not [string]::Equals($recordedDestination, $expectedDestination, [StringComparison]::OrdinalIgnoreCase) -or
-        [string]$metadata.distro -cne $Distro) {
+        [string]$metadata.distro -cne $Distro -or [string]$metadata.wsl_user -cne $WslUser) {
         throw 'Acceptance resume arguments do not match the immutable target metadata.'
     }
 }
@@ -422,7 +425,7 @@ function Write-AcceptanceStatus {
         [Parameter(Mandatory = $true)][bool]$ControllerKeyInstalled
     )
     if (-not (Test-Path -LiteralPath $AcceptanceStateDirectory)) { New-Item -ItemType Directory -Path $AcceptanceStateDirectory -Force | Out-Null }
-    $status = [ordered]@{ disclaimer = 'TEST CONTROL PLANE (test-control-plane) ONLY; no ordinary recovery was invoked and no private key is stored.'; hostname = $env:COMPUTERNAME; windows_user = $Account; lan_ip = $LanIp; ssh_port = 22; sshd_ready = $SshdReady; controller_key_installed = $ControllerKeyInstalled; launcher_path = $PSCommandPath; recovery_destination = $Destination; distro = $Distro }
+    $status = [ordered]@{ disclaimer = 'TEST CONTROL PLANE (test-control-plane) ONLY; no ordinary recovery was invoked and no private key is stored.'; hostname = $env:COMPUTERNAME; windows_user = $Account; lan_ip = $LanIp; ssh_port = 22; sshd_ready = $SshdReady; controller_key_installed = $ControllerKeyInstalled; launcher_path = $PSCommandPath; recovery_destination = $Destination; distro = $Distro; wsl_user = $WslUser }
     $status | ConvertTo-Json | Set-Content -LiteralPath $AcceptanceTargetPath -Encoding utf8
 }
 
@@ -475,6 +478,7 @@ function Remove-AcceptanceHarness {
 
 # Execution
 Assert-WindowsHost
+if ($WslUser -notmatch '^[a-z_][a-z0-9_-]{0,31}$') { throw 'WslUser must be a safe lowercase Linux account name.' }
 if ($RemoveAcceptanceHarness) {
     Ensure-AcceptanceElevation
     Remove-AcceptanceHarness
