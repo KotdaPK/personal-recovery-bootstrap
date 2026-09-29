@@ -28,8 +28,7 @@ $ErrorActionPreference = 'Stop'
 $Repository = 'KotdaPK/personal-recovery-bootstrap'
 $ExpectedOrigin = 'https://github.com/KotdaPK/personal-recovery-bootstrap.git'
 $ExpectedControllerCommit = '5dd47f126a042425e03f439f1510f26f79f3d227'
-$ControllerRepo = '$HOME/src/personal-infra'
-$ControllerKey = '$HOME/.ssh/personal-recovery-acceptance'
+
 
 function Invoke-CheckedNative {
     param(
@@ -60,6 +59,10 @@ function Remove-PairingBranch {
 if ($env:OS -ne 'Windows_NT') { throw 'Run this controller wrapper from Windows PowerShell on the old/current laptop.' }
 if (-not (Get-Command wsl.exe -ErrorAction SilentlyContinue)) { throw 'WSL is required on the old/current laptop.' }
 if (-not (Get-Command git.exe -ErrorAction SilentlyContinue)) { throw 'Git for Windows is required on the old/current laptop.' }
+$WslHome = (& wsl.exe -- bash -lc 'printf $HOME').Trim()
+if ($LASTEXITCODE -ne 0 -or -not $WslHome.StartsWith('/')) { throw 'Could not resolve the old laptop WSL home.' }
+$ControllerRepo = "$WslHome/src/personal-infra"
+$ControllerKey = "$WslHome/.ssh/personal-recovery-acceptance"
 
 $RepoRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $origin = (& git.exe -C $RepoRoot config --get remote.origin.url).Trim()
@@ -73,15 +76,18 @@ Invoke-CheckedNative { & wsl.exe -- gh auth status --hostname github.com } 'GitH
 $remoteHead = (& wsl.exe -- gh api "repos/$Repository/git/ref/heads/main" --jq '.object.sha').Trim()
 if ($LASTEXITCODE -ne 0 -or $remoteHead -cne $head) { throw 'The local launcher checkout must exactly match published origin/main.' }
 
-$controllerCheck = "cd $ControllerRepo && test `"`$(git rev-parse HEAD)`" = '$ExpectedControllerCommit' && test -z `"`$(git status --porcelain=v1)`""
-Invoke-CheckedNative { & wsl.exe -- bash -lc $controllerCheck } 'The reviewed personal-infra controller checkout is missing, dirty, or at the wrong commit'
+$controllerHead = (& wsl.exe -- git -C $ControllerRepo rev-parse HEAD).Trim()
+$controllerStatus = @(& wsl.exe -- git -C $ControllerRepo status --porcelain=v1)
+if ($LASTEXITCODE -ne 0 -or $controllerHead -cne $ExpectedControllerCommit -or $controllerStatus.Count -ne 0) {
+    throw 'The reviewed personal-infra controller checkout is missing, dirty, or at the wrong commit.'
+}
 if ($DryRun) {
     Write-Host "PASS: controller, GitHub authentication, published launcher commit, and reviewed personal-infra checkout are ready."
     Write-Host 'Dry run: no key, pairing branch, or controller run was created.'
     return
 }
-Invoke-CheckedNative { & wsl.exe -- bash -lc "cd $ControllerRepo && ./acceptance/prepare-controller.sh" } 'Could not prepare the isolated controller key'
-$publicKey = (& wsl.exe -- bash -lc "cat $ControllerKey.pub").Trim()
+Invoke-CheckedNative { & wsl.exe -- bash "$ControllerRepo/acceptance/prepare-controller.sh" } 'Could not prepare the isolated controller key'
+$publicKey = (& wsl.exe -- cat "${ControllerKey}.pub").Trim()
 if ($LASTEXITCODE -ne 0 -or $publicKey -notmatch '^(ssh-ed25519|ecdsa-sha2-nistp(256|384|521)|ssh-rsa) [A-Za-z0-9+/]+={0,2}( .*)?$') {
     throw 'The generated controller public key is invalid.'
 }
@@ -132,8 +138,7 @@ try {
 
     if (Remove-PairingBranch -Branch $branch) { $published = $false }
 
-    $controllerCommand = "cd $ControllerRepo && ACCEPTANCE_KEY_PATH=`"$ControllerKey`" ./acceptance/run-controller.sh '$Target'"
-    & wsl.exe -- bash -lc $controllerCommand
+    & wsl.exe -- env "ACCEPTANCE_KEY_PATH=$ControllerKey" bash "$ControllerRepo/acceptance/run-controller.sh" $Target
     if ($LASTEXITCODE -ne 0) { throw "Acceptance controller failed (exit code $LASTEXITCODE)." }
 } finally {
     if ($published) { [void](Remove-PairingBranch -Branch $branch) }
