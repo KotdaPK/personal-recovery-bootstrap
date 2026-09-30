@@ -52,6 +52,10 @@ if ! command -v git >/dev/null; then
 fi
 
 origin='https://github.com/KotdaPK/personal-recovery-bootstrap.git'
+if git config --show-origin --get-regexp '^url\..*\.insteadof$' >/dev/null 2>&1; then
+  printf 'Git URL rewrite rules are configured; refusing a supply-chain-sensitive recovery fetch.\n' >&2
+  exit 2
+fi
 if [[ -e $destination ]]; then
   [[ -d $destination && -z $(find "$destination" -mindepth 1 -maxdepth 1 -print -quit) ]] || {
     printf 'Destination must be absent or empty: %s\n' "$destination" >&2
@@ -61,7 +65,7 @@ else
   mkdir -p -- "$destination"
 fi
 
-git init --quiet "$destination"
+git init --quiet -- "$destination"
 git -C "$destination" remote add origin "$origin"
 git -C "$destination" fetch --depth 1 origin "$launcher_commit"
 git -C "$destination" checkout --quiet --detach "$launcher_commit"

@@ -59,8 +59,8 @@ function Assert-ControllerTarget {
 function Remove-PairingBranch {
     param([Parameter(Mandatory = $true)][string]$Branch)
     for ($attempt = 1; $attempt -le 3; $attempt++) {
-        & wsl.exe -- gh api --method DELETE "repos/$Repository/git/refs/heads/$Branch" 2>$null
-        $refsJson = (& wsl.exe -- gh api "repos/$Repository/git/matching-refs/heads" 2>$null) -join "`n"
+        & wsl.exe -d $BootstrapWslDistro -- gh api --method DELETE "repos/$Repository/git/refs/heads/$Branch" 2>$null
+        $refsJson = (& wsl.exe -d $BootstrapWslDistro -- gh api "repos/$Repository/git/matching-refs/heads" 2>$null) -join "`n"
         if ($LASTEXITCODE -eq 0) {
             try { $remaining = @($refsJson | ConvertFrom-Json | Where-Object { $_.ref -ceq "refs/heads/$Branch" }).Count } catch { $remaining = -1 }
             if ($remaining -eq 0) { return $true }
@@ -73,32 +73,25 @@ function Remove-PairingBranch {
 
 if ($env:OS -ne 'Windows_NT') { throw 'Run this controller wrapper from Windows PowerShell on the old/current laptop.' }
 if (-not (Get-Command wsl.exe -ErrorAction SilentlyContinue)) { throw 'WSL is required on the old/current laptop.' }
-if (-not (Get-Command git.exe -ErrorAction SilentlyContinue)) { throw 'Git for Windows is required on the old/current laptop.' }
-$WslHome = (& wsl.exe -- bash -lc 'printf $HOME').Trim()
+if ($BootstrapWslDistro -notmatch '^[A-Za-z0-9._-]+$' -or $BootstrapWslRepoRoot -notmatch '^/[^\r\n]+$') { throw 'Run this controller through Start-AcceptanceController.sh inside WSL.' }
+$WslHome = (& wsl.exe -d $BootstrapWslDistro -- bash -lc 'printf $HOME').Trim()
 if ($LASTEXITCODE -ne 0 -or -not $WslHome.StartsWith('/')) { throw 'Could not resolve the old laptop WSL home.' }
 $ControllerRepo = "$WslHome/src/personal-infra"
 
 $RepoRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
-if ($BootstrapWslDistro -or $BootstrapWslRepoRoot) {
-    if ($BootstrapWslDistro -notmatch '^[A-Za-z0-9._-]+$' -or $BootstrapWslRepoRoot -notmatch '^/[^\r\n]+$') { throw 'WSL controller checkout metadata is invalid.' }
-    $origin = (& wsl.exe -d $BootstrapWslDistro -- git -C $BootstrapWslRepoRoot config --get remote.origin.url).Trim()
-    $head = (& wsl.exe -d $BootstrapWslDistro -- git -C $BootstrapWslRepoRoot rev-parse HEAD).Trim()
-    $status = @(& wsl.exe -d $BootstrapWslDistro -- git -C $BootstrapWslRepoRoot status --porcelain=v1)
-} else {
-    $origin = (& git.exe -C $RepoRoot config --get remote.origin.url).Trim()
-    $head = (& git.exe -C $RepoRoot rev-parse HEAD).Trim()
-    $status = @(& git.exe -C $RepoRoot status --porcelain=v1)
-}
+$origin = (& wsl.exe -d $BootstrapWslDistro -- git -C $BootstrapWslRepoRoot config --get remote.origin.url).Trim()
+$head = (& wsl.exe -d $BootstrapWslDistro -- git -C $BootstrapWslRepoRoot rev-parse HEAD).Trim()
+$status = @(& wsl.exe -d $BootstrapWslDistro -- git -C $BootstrapWslRepoRoot status --porcelain=v1)
 if ($origin -cne $ExpectedOrigin) { throw "Run from the canonical $ExpectedOrigin checkout." }
 if ($head -notmatch '^[0-9a-f]{40}$') { throw 'Could not resolve the local launcher commit.' }
 if ($LASTEXITCODE -ne 0 -or $status.Count -ne 0) { throw 'The launcher checkout must be clean before publishing a pairing.' }
 
-Invoke-CheckedNative { & wsl.exe -- gh auth status --hostname github.com } 'GitHub CLI authentication is required in WSL'
-$remoteHead = (& wsl.exe -- gh api "repos/$Repository/git/ref/heads/main" --jq '.object.sha').Trim()
+Invoke-CheckedNative { & wsl.exe -d $BootstrapWslDistro -- gh auth status --hostname github.com } 'GitHub CLI authentication is required in WSL'
+$remoteHead = (& wsl.exe -d $BootstrapWslDistro -- gh api "repos/$Repository/git/ref/heads/main" --jq '.object.sha').Trim()
 if ($LASTEXITCODE -ne 0 -or $remoteHead -cne $head) { throw 'The local launcher checkout must exactly match published origin/main.' }
 
-$controllerHead = (& wsl.exe -- git -C $ControllerRepo rev-parse HEAD).Trim()
-$controllerStatus = @(& wsl.exe -- git -C $ControllerRepo status --porcelain=v1)
+$controllerHead = (& wsl.exe -d $BootstrapWslDistro -- git -C $ControllerRepo rev-parse HEAD).Trim()
+$controllerStatus = @(& wsl.exe -d $BootstrapWslDistro -- git -C $ControllerRepo status --porcelain=v1)
 if ($LASTEXITCODE -ne 0 -or $controllerHead -cne $ExpectedControllerCommit -or $controllerStatus.Count -ne 0) {
     throw 'The reviewed personal-infra controller checkout is missing, dirty, or at the wrong commit.'
 }
@@ -110,8 +103,8 @@ if ($DryRun) {
 $pairingId = [Guid]::NewGuid().ToString('N').Substring(0, 12)
 $ControllerKey = "$WslHome/.ssh/personal-recovery-acceptance-$pairingId"
 $ControllerKnownHosts = "$WslHome/.ssh/personal-recovery-acceptance-known-hosts-$pairingId"
-Invoke-CheckedNative { & wsl.exe -- env "ACCEPTANCE_KEY_PATH=$ControllerKey" bash "$ControllerRepo/acceptance/prepare-controller.sh" } 'Could not prepare the isolated controller key'
-$publicKey = (& wsl.exe -- cat "${ControllerKey}.pub").Trim()
+Invoke-CheckedNative { & wsl.exe -d $BootstrapWslDistro -- env "ACCEPTANCE_KEY_PATH=$ControllerKey" bash "$ControllerRepo/acceptance/prepare-controller.sh" } 'Could not prepare the isolated controller key'
+$publicKey = (& wsl.exe -d $BootstrapWslDistro -- cat "${ControllerKey}.pub").Trim()
 if ($LASTEXITCODE -ne 0 -or $publicKey -notmatch '^(ssh-ed25519|ecdsa-sha2-nistp(256|384|521)|ssh-rsa) [A-Za-z0-9+/]+={0,2}( .*)?$') {
     throw 'The generated controller public key is invalid.'
 }
@@ -136,11 +129,11 @@ $published = $false
 
 try {
     Invoke-CheckedNative {
-        & wsl.exe -- gh api --method POST "repos/$Repository/git/refs" -f "ref=refs/heads/$branch" -f "sha=$head" | Out-Null
+        & wsl.exe -d $BootstrapWslDistro -- gh api --method POST "repos/$Repository/git/refs" -f "ref=refs/heads/$branch" -f "sha=$head" | Out-Null
     } 'Could not create the temporary pairing branch'
     $published = $true
     Invoke-CheckedNative {
-        & wsl.exe -- gh api --method PUT "repos/$Repository/contents/pairings/$pairingId.json" -f 'message=chore: publish temporary acceptance pairing' -f "content=$encodedPayload" -f "branch=$branch" | Out-Null
+        & wsl.exe -d $BootstrapWslDistro -- gh api --method PUT "repos/$Repository/contents/pairings/$pairingId.json" -f 'message=chore: publish temporary acceptance pairing' -f "content=$encodedPayload" -f "branch=$branch" | Out-Null
     } 'Could not publish the temporary pairing payload'
 
     Write-Host ''
@@ -168,14 +161,14 @@ try {
     $controllerFailure = $null
     $cleanupFailure = $null
     try {
-        & wsl.exe -- env "ACCEPTANCE_KEY_PATH=$ControllerKey" "ACCEPTANCE_KNOWN_HOSTS=$ControllerKnownHosts" bash "$ControllerRepo/acceptance/run-controller.sh" $Target --expect-pairing $pairingId
+        & wsl.exe -d $BootstrapWslDistro -- env "ACCEPTANCE_KEY_PATH=$ControllerKey" "ACCEPTANCE_KNOWN_HOSTS=$ControllerKnownHosts" bash "$ControllerRepo/acceptance/run-controller.sh" $Target --expect-pairing $pairingId
         if ($LASTEXITCODE -ne 0) { throw "Acceptance controller failed (exit code $LASTEXITCODE)." }
     } catch {
         $controllerFailure = $_
     } finally {
-        & wsl.exe -- env "ACCEPTANCE_KEY_PATH=$ControllerKey" "ACCEPTANCE_KNOWN_HOSTS=$ControllerKnownHosts" bash "$ControllerRepo/acceptance/collect-evidence.sh" $Target
+        & wsl.exe -d $BootstrapWslDistro -- env "ACCEPTANCE_KEY_PATH=$ControllerKey" "ACCEPTANCE_KNOWN_HOSTS=$ControllerKnownHosts" bash "$ControllerRepo/acceptance/collect-evidence.sh" $Target
         if ($LASTEXITCODE -ne 0) { Write-Warning 'Acceptance evidence collection did not complete; continuing mandatory access cleanup.' }
-        & wsl.exe -- env "ACCEPTANCE_KEY_PATH=$ControllerKey" "ACCEPTANCE_KNOWN_HOSTS=$ControllerKnownHosts" bash "$ControllerRepo/acceptance/remove-harness.sh" $Target --expect-pairing $pairingId
+        & wsl.exe -d $BootstrapWslDistro -- env "ACCEPTANCE_KEY_PATH=$ControllerKey" "ACCEPTANCE_KNOWN_HOSTS=$ControllerKnownHosts" bash "$ControllerRepo/acceptance/remove-harness.sh" $Target --expect-pairing $pairingId
         if ($LASTEXITCODE -ne 0) { $cleanupFailure = "Target acceptance cleanup failed (exit code $LASTEXITCODE); the target-side expiry task remains the fail-safe." }
     }
     if ($cleanupFailure) { throw $cleanupFailure }
@@ -183,6 +176,6 @@ try {
 } finally {
     $branchCleanupFailed = $false
     if ($published -and -not (Remove-PairingBranch -Branch $branch)) { $branchCleanupFailed = $true }
-    if ($ControllerKey) { & wsl.exe -- rm -f -- $ControllerKey "${ControllerKey}.pub" $ControllerKnownHosts }
+    if ($ControllerKey) { & wsl.exe -d $BootstrapWslDistro -- rm -f -- $ControllerKey "${ControllerKey}.pub" $ControllerKnownHosts }
     if ($branchCleanupFailed) { throw "Could not confirm deletion of temporary pairing branch $branch." }
 }

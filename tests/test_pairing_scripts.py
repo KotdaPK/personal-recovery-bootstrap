@@ -23,6 +23,8 @@ class PairingScriptContractTests(unittest.TestCase):
     def test_fresh_wsl_bootstrap_installs_git_and_invokes_windows_harness_safely(self):
         source = BOOTSTRAP_SH.read_text(encoding="utf-8")
         self.assertIn("sudo apt-get install -y git ca-certificates", source)
+        self.assertIn("git config --show-origin --get-regexp '^url\\..*\\.insteadof$'", source)
+        self.assertIn("git init --quiet -- \"$destination\"", source)
         self.assertIn("git -C \"$destination\" fetch --depth 1 origin \"$launcher_commit\"", source)
         self.assertIn("Start-AcceptanceTarget.ps1", source)
         self.assertIn("wslpath -w", source)
@@ -121,6 +123,7 @@ class PairingScriptContractTests(unittest.TestCase):
         self.assertIn("Start-CleanAcceptance.sh", source)
         self.assertIn("open WSL and run", source)
         self.assertIn("wsl.exe -d $BootstrapWslDistro -- git -C $BootstrapWslRepoRoot", source)
+        self.assertNotIn("wsl.exe --", source)
 
     def test_readme_documents_two_machine_pairing_without_calling_public_key_secret(self):
         source = README.read_text(encoding="utf-8")
