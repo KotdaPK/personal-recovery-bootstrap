@@ -25,12 +25,22 @@ done
   printf 'Run this script inside WSL.\n' >&2
   exit 2
 }
-command -v powershell.exe >/dev/null || { printf 'Windows PowerShell interop is unavailable in this WSL distro.\n' >&2; exit 2; }
+powershell_bin=$(command -v powershell.exe || true)
+if [[ -z $powershell_bin && -x /mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe ]]; then
+  powershell_bin=/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe
+fi
+[[ -n $powershell_bin ]] || { printf 'Windows PowerShell interop is unavailable in this WSL distro.\n' >&2; exit 2; }
 command -v wslpath >/dev/null || { printf 'wslpath is unavailable in this WSL distro.\n' >&2; exit 2; }
-[[ -n ${WSL_DISTRO_NAME:-} ]] || { printf 'WSL_DISTRO_NAME is unavailable; launch this from a normal WSL session.\n' >&2; exit 2; }
+wsl_distro=${WSL_DISTRO_NAME:-}
+if [[ -z $wsl_distro ]]; then
+  windows_wsl_root=$(wslpath -w / | tr -d '\r\n' | tr '\\' '/')
+  windows_wsl_root=${windows_wsl_root%/}
+  wsl_distro=${windows_wsl_root##*/}
+fi
+[[ $wsl_distro =~ ^[A-Za-z0-9._-]+$ ]] || { printf 'Could not resolve the current WSL distro name.\n' >&2; exit 2; }
 
 if [[ -z $destination ]]; then
-  windows_destination=$(powershell.exe -NoProfile -Command '[IO.Path]::Combine([Environment]::GetFolderPath("UserProfile"),"PersonalRecoveryAcceptance")' | tr -d '\r')
+  windows_destination=$("$powershell_bin" -NoProfile -Command '[IO.Path]::Combine([Environment]::GetFolderPath("UserProfile"),"PersonalRecoveryAcceptance")' | tr -d '\r')
   [[ $windows_destination == ?:\\* ]] || { printf 'Could not resolve the Windows user profile.\n' >&2; exit 2; }
   destination=$(wslpath -u "$windows_destination")
 fi
@@ -66,7 +76,7 @@ windows_target=$(wslpath -w "$target_script")
 
 # Process-scoped Bypass lets the reviewed immutable script run without changing
 # the machine or user execution-policy configuration.
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$windows_target" \
+"$powershell_bin" -NoProfile -ExecutionPolicy Bypass -File "$windows_target" \
   -PairingId "$pairing_id" \
-  -BootstrapWslDistro "$WSL_DISTRO_NAME" \
+  -BootstrapWslDistro "$wsl_distro" \
   -BootstrapWslRepoRoot "$destination"

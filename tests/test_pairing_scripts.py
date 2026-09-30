@@ -27,6 +27,7 @@ class PairingScriptContractTests(unittest.TestCase):
         self.assertIn("Start-AcceptanceTarget.ps1", source)
         self.assertIn("wslpath -w", source)
         self.assertIn("powershell.exe", source)
+        self.assertIn("/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe", source)
         self.assertIn("-ExecutionPolicy Bypass", source)
         self.assertIn("-BootstrapWslDistro", source)
         self.assertIn("-BootstrapWslRepoRoot", source)
@@ -37,7 +38,10 @@ class PairingScriptContractTests(unittest.TestCase):
         self.assertIn("Start-AcceptanceController.ps1", source)
         self.assertIn("wslpath -w", source)
         self.assertIn("powershell.exe", source)
+        self.assertIn("/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe", source)
         self.assertIn("-ExecutionPolicy Bypass", source)
+        self.assertIn("-BootstrapWslDistro", source)
+        self.assertIn("-BootstrapWslRepoRoot", source)
 
     def test_clean_target_bootstrap_installs_git_and_fetches_exact_launcher_commit(self):
         source = BOOTSTRAP.read_text(encoding="utf-8")
@@ -116,6 +120,7 @@ class PairingScriptContractTests(unittest.TestCase):
         self.assertNotIn("git clone https://github.com/KotdaPK/personal-infra", source)
         self.assertIn("Start-CleanAcceptance.sh", source)
         self.assertIn("open WSL and run", source)
+        self.assertIn("wsl.exe -d $BootstrapWslDistro -- git -C $BootstrapWslRepoRoot", source)
 
     def test_readme_documents_two_machine_pairing_without_calling_public_key_secret(self):
         source = README.read_text(encoding="utf-8")

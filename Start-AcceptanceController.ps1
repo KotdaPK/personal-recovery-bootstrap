@@ -23,7 +23,13 @@ param(
     [string]$Target,
 
     [Parameter()]
-    [switch]$DryRun
+    [switch]$DryRun,
+
+    [Parameter(DontShow = $true)]
+    [string]$BootstrapWslDistro,
+
+    [Parameter(DontShow = $true)]
+    [string]$BootstrapWslRepoRoot
 )
 
 Set-StrictMode -Version Latest
@@ -73,11 +79,18 @@ if ($LASTEXITCODE -ne 0 -or -not $WslHome.StartsWith('/')) { throw 'Could not re
 $ControllerRepo = "$WslHome/src/personal-infra"
 
 $RepoRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
-$origin = (& git.exe -C $RepoRoot config --get remote.origin.url).Trim()
-if ($LASTEXITCODE -ne 0 -or $origin -cne $ExpectedOrigin) { throw "Run from the canonical $ExpectedOrigin checkout." }
-$head = (& git.exe -C $RepoRoot rev-parse HEAD).Trim()
-if ($LASTEXITCODE -ne 0 -or $head -notmatch '^[0-9a-f]{40}$') { throw 'Could not resolve the local launcher commit.' }
-$status = @(& git.exe -C $RepoRoot status --porcelain=v1)
+if ($BootstrapWslDistro -or $BootstrapWslRepoRoot) {
+    if ($BootstrapWslDistro -notmatch '^[A-Za-z0-9._-]+$' -or $BootstrapWslRepoRoot -notmatch '^/[^\r\n]+$') { throw 'WSL controller checkout metadata is invalid.' }
+    $origin = (& wsl.exe -d $BootstrapWslDistro -- git -C $BootstrapWslRepoRoot config --get remote.origin.url).Trim()
+    $head = (& wsl.exe -d $BootstrapWslDistro -- git -C $BootstrapWslRepoRoot rev-parse HEAD).Trim()
+    $status = @(& wsl.exe -d $BootstrapWslDistro -- git -C $BootstrapWslRepoRoot status --porcelain=v1)
+} else {
+    $origin = (& git.exe -C $RepoRoot config --get remote.origin.url).Trim()
+    $head = (& git.exe -C $RepoRoot rev-parse HEAD).Trim()
+    $status = @(& git.exe -C $RepoRoot status --porcelain=v1)
+}
+if ($origin -cne $ExpectedOrigin) { throw "Run from the canonical $ExpectedOrigin checkout." }
+if ($head -notmatch '^[0-9a-f]{40}$') { throw 'Could not resolve the local launcher commit.' }
 if ($LASTEXITCODE -ne 0 -or $status.Count -ne 0) { throw 'The launcher checkout must be clean before publishing a pairing.' }
 
 Invoke-CheckedNative { & wsl.exe -- gh auth status --hostname github.com } 'GitHub CLI authentication is required in WSL'
