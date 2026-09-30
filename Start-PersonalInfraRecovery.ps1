@@ -135,7 +135,7 @@ function Ensure-GitHubAuthentication {
 
     Write-Host 'GitHub authentication is required for the private repository.'
     Write-Host 'A browser sign-in will open. Authorize the GitHub CLI, then return here.'
-    & gh auth login --hostname github.com --web
+    & gh auth login --hostname github.com --web --git-protocol https
     if ($LASTEXITCODE -ne 0) {
         throw "GitHub CLI login failed (exit code $LASTEXITCODE)."
     }
@@ -294,7 +294,7 @@ function Ensure-AcceptanceElevation {
         throw 'Elevation changed the invoking account or profile; refusing to install an acceptance key for an unexpected identity.'
     }
     if (Test-IsAdministrator) { return }
-    $forwarded = @('-NoProfile', '-ExecutionPolicy', 'RemoteSigned', '-File', (ConvertTo-ProcessArgument $PSCommandPath))
+    $forwarded = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', (ConvertTo-ProcessArgument $PSCommandPath))
     if ($AcceptanceHarness) {
         $forwarded += '-AcceptanceHarness'
         if ($ControllerPublicKey) { $forwarded += @('-ControllerPublicKey', (ConvertTo-ProcessArgument $ControllerPublicKey)) }

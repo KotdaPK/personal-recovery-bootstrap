@@ -138,11 +138,10 @@ try {
     Write-Host "Pairing retrieval expires UTC: $expiresUtc"
     Write-Host "Target access auto-removal UTC: $accessExpiresUtc"
     Write-Host ''
-    Write-Host 'On the NEW/CLEAN laptop, run these PowerShell commands:'
-    Write-Host "  `$uri = 'https://raw.githubusercontent.com/KotdaPK/personal-recovery-bootstrap/$head/Start-CleanAcceptance.ps1'"
-    Write-Host "  Invoke-WebRequest -Uri `$uri -OutFile .\Start-CleanAcceptance.ps1"
-    Write-Host "  Unblock-File .\Start-CleanAcceptance.ps1"
-    Write-Host "  .\Start-CleanAcceptance.ps1 -PairingId $pairingId -LauncherCommit $head"
+    Write-Host 'On the NEW/CLEAN laptop, open WSL and run:'
+    Write-Host "  curl -fsSLo Start-CleanAcceptance.sh https://raw.githubusercontent.com/KotdaPK/personal-recovery-bootstrap/$head/Start-CleanAcceptance.sh"
+    Write-Host '  chmod +x Start-CleanAcceptance.sh'
+    Write-Host "  ./Start-CleanAcceptance.sh --pairing-id $pairingId --launcher-commit $head"
     Write-Host ''
     Write-Host 'The temporary branch contains only an ephemeral public key and nonsecret metadata.'
     Write-Host 'The private key remains only in the old laptop WSL home.'

@@ -7,6 +7,8 @@ ROOT = Path(__file__).resolve().parents[1]
 OLD = ROOT / "Start-AcceptanceController.ps1"
 NEW = ROOT / "Start-AcceptanceTarget.ps1"
 BOOTSTRAP = ROOT / "Start-CleanAcceptance.ps1"
+BOOTSTRAP_SH = ROOT / "Start-CleanAcceptance.sh"
+CONTROLLER_SH = ROOT / "Start-AcceptanceController.sh"
 README = ROOT / "README.md"
 
 
@@ -15,6 +17,27 @@ class PairingScriptContractTests(unittest.TestCase):
         self.assertTrue(OLD.is_file())
         self.assertTrue(NEW.is_file())
         self.assertTrue(BOOTSTRAP.is_file())
+        self.assertTrue(BOOTSTRAP_SH.is_file())
+        self.assertTrue(CONTROLLER_SH.is_file())
+
+    def test_fresh_wsl_bootstrap_installs_git_and_invokes_windows_harness_safely(self):
+        source = BOOTSTRAP_SH.read_text(encoding="utf-8")
+        self.assertIn("sudo apt-get install -y git ca-certificates", source)
+        self.assertIn("git -C \"$destination\" fetch --depth 1 origin \"$launcher_commit\"", source)
+        self.assertIn("Start-AcceptanceTarget.ps1", source)
+        self.assertIn("wslpath -w", source)
+        self.assertIn("powershell.exe", source)
+        self.assertIn("-ExecutionPolicy Bypass", source)
+        self.assertIn("-BootstrapWslDistro", source)
+        self.assertIn("-BootstrapWslRepoRoot", source)
+        self.assertNotRegex(source, r"(?i)(token|password|private.key)\s*=")
+
+    def test_wsl_controller_wrapper_invokes_reviewed_windows_controller(self):
+        source = CONTROLLER_SH.read_text(encoding="utf-8")
+        self.assertIn("Start-AcceptanceController.ps1", source)
+        self.assertIn("wslpath -w", source)
+        self.assertIn("powershell.exe", source)
+        self.assertIn("-ExecutionPolicy Bypass", source)
 
     def test_clean_target_bootstrap_installs_git_and_fetches_exact_launcher_commit(self):
         source = BOOTSTRAP.read_text(encoding="utf-8")
@@ -79,6 +102,9 @@ class PairingScriptContractTests(unittest.TestCase):
         ):
             self.assertIn(required, source)
         self.assertIn("https://api.github.com/repos/$Repository/contents/pairings/", source)
+        self.assertIn("wsl.exe -d $wslDistro -- git -C $wslRepoRoot", source)
+        self.assertIn("[string]$BootstrapWslDistro", source)
+        self.assertIn("[string]$BootstrapWslRepoRoot", source)
         self.assertNotIn("ExecutionPolicy Bypass", source)
 
     def test_controller_runs_existing_reviewed_wsl_controller_without_username_guessing(self):
@@ -88,6 +114,8 @@ class PairingScriptContractTests(unittest.TestCase):
         self.assertIn("WindowsUser@LAN-IP", source)
         self.assertRegex(source, r"\^\[A-Za-z0-9\._-\]\+@")
         self.assertNotIn("git clone https://github.com/KotdaPK/personal-infra", source)
+        self.assertIn("Start-CleanAcceptance.sh", source)
+        self.assertIn("open WSL and run", source)
 
     def test_readme_documents_two_machine_pairing_without_calling_public_key_secret(self):
         source = README.read_text(encoding="utf-8")

@@ -15,7 +15,13 @@ param(
     [string]$PairingId,
 
     [Parameter()]
-    [switch]$DryRun
+    [switch]$DryRun,
+
+    [Parameter(DontShow = $true)]
+    [string]$BootstrapWslDistro,
+
+    [Parameter(DontShow = $true)]
+    [string]$BootstrapWslRepoRoot
 )
 
 Set-StrictMode -Version Latest
@@ -33,15 +39,31 @@ function Assert-PublicKey {
     }
 }
 
-if ($env:OS -ne 'Windows_NT') { throw 'Run this target wrapper from Windows PowerShell on the new/clean laptop.' }
-if (-not (Get-Command git.exe -ErrorAction SilentlyContinue)) { throw 'Git for Windows is required. Install Git, clone the public repository, and rerun.' }
-
+if ($env:OS -ne 'Windows_NT') { throw 'Run this target wrapper through the reviewed WSL bootstrap on the new/clean laptop.' }
 $RepoRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
-$origin = (& git.exe -C $RepoRoot config --get remote.origin.url).Trim()
-if ($LASTEXITCODE -ne 0 -or $origin -cne $ExpectedOrigin) { throw "Run from the canonical $ExpectedOrigin checkout." }
-$head = (& git.exe -C $RepoRoot rev-parse HEAD).Trim()
-if ($LASTEXITCODE -ne 0 -or $head -notmatch '^[0-9a-f]{40}$') { throw 'Could not resolve the local launcher commit.' }
-$status = @(& git.exe -C $RepoRoot status --porcelain=v1)
+$wslDistro = $null
+$wslRepoRoot = $null
+if ($BootstrapWslDistro -or $BootstrapWslRepoRoot) {
+    if ($BootstrapWslDistro -notmatch '^[A-Za-z0-9._-]+$' -or $BootstrapWslRepoRoot -notmatch '^/[^\r\n]+$') { throw 'WSL bootstrap checkout metadata is invalid.' }
+    $wslDistro = $BootstrapWslDistro
+    $wslRepoRoot = $BootstrapWslRepoRoot
+    $origin = (& wsl.exe -d $wslDistro -- git -C $wslRepoRoot config --get remote.origin.url).Trim()
+    $head = (& wsl.exe -d $wslDistro -- git -C $wslRepoRoot rev-parse HEAD).Trim()
+    $status = @(& wsl.exe -d $wslDistro -- git -C $wslRepoRoot status --porcelain=v1)
+} elseif ($RepoRoot -match '^\\\\wsl(?:\.localhost)?\\(?<distro>[^\\]+)\\(?<path>.*)$') {
+    $wslDistro = $Matches.distro
+    $wslRepoRoot = '/' + $Matches.path.Replace('\', '/')
+    $origin = (& wsl.exe -d $wslDistro -- git -C $wslRepoRoot config --get remote.origin.url).Trim()
+    $head = (& wsl.exe -d $wslDistro -- git -C $wslRepoRoot rev-parse HEAD).Trim()
+    $status = @(& wsl.exe -d $wslDistro -- git -C $wslRepoRoot status --porcelain=v1)
+} else {
+    if (-not (Get-Command git.exe -ErrorAction SilentlyContinue)) { throw 'The launcher must be a verified WSL checkout or Git for Windows must be installed.' }
+    $origin = (& git.exe -C $RepoRoot config --get remote.origin.url).Trim()
+    $head = (& git.exe -C $RepoRoot rev-parse HEAD).Trim()
+    $status = @(& git.exe -C $RepoRoot status --porcelain=v1)
+}
+if ($origin -cne $ExpectedOrigin) { throw "Run from the canonical $ExpectedOrigin checkout." }
+if ($head -notmatch '^[0-9a-f]{40}$') { throw 'Could not resolve the local launcher commit.' }
 if ($LASTEXITCODE -ne 0 -or $status.Count -ne 0) { throw 'The launcher checkout must be clean before consuming a pairing.' }
 
 Write-Host "Fetching nonsecret pairing $PairingId from its temporary GitHub branch..."

@@ -65,6 +65,7 @@ class LauncherContractTests(unittest.TestCase):
 
     def test_auth_flow_uses_web_login_and_verifies_status(self):
         self.assertIn("gh auth login --hostname github.com --web", self.source)
+        self.assertIn("--git-protocol https", self.source)
         statuses = [m.start() for m in re.finditer(r"gh auth status --hostname github\.com", self.source)]
         self.assertGreaterEqual(len(statuses), 2)
 
@@ -98,6 +99,8 @@ class LauncherContractTests(unittest.TestCase):
     def test_acceptance_harness_is_uac_elevated_and_installs_openssh_server(self):
         self.assertIn("Start-Process", self.source)
         self.assertIn("-Verb RunAs", self.source)
+        self.assertIn("'-ExecutionPolicy', 'Bypass'", self.source)
+        self.assertNotIn("Set-ExecutionPolicy", self.source)
         self.assertIn("OpenSSH.Server~~~~0.0.1.0", self.source)
         self.assertIn("Add-WindowsCapability", self.source)
         self.assertIn("Set-Service -Name 'sshd' -StartupType Automatic", self.source)

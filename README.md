@@ -92,13 +92,13 @@ GitHub branch. The branch is removed before recovery begins (and retried from a
 `finally` block on failure); recovery refuses to start unless deletion is
 confirmed. The private key never leaves the old laptop.
 
-1. On the **old/current Windows laptop**, clone or update this public repository
-   and run:
+1. On the **old/current laptop**, open WSL, clone or update this public
+   repository, and run:
 
-   ```powershell
+   ```bash
    git clone https://github.com/KotdaPK/personal-recovery-bootstrap.git
    cd personal-recovery-bootstrap
-   .\Start-AcceptanceController.ps1
+   ./Start-AcceptanceController.sh
    ```
 
    The script verifies its clean published checkout, verifies the reviewed
@@ -107,17 +107,20 @@ confirmed. The private key never leaves the old laptop.
    prints an exact target command containing a random 12-character pairing ID.
    Leave this script running at its target prompt.
 
-2. On the **new/clean Windows laptop**, run the commands printed by the old
-   laptop. They download one immutable bootstrap script; it installs Git when
-   absent, fetches the exact launcher commit, verifies it, and runs
-   `Start-AcceptanceTarget.ps1`. Their shape is:
+2. On the **new/clean Windows laptop**, open WSL and run the commands printed by
+   the old laptop. They download one immutable WSL bootstrap script; it installs
+   WSL Git when absent, fetches the exact launcher commit, verifies it, and runs
+   `Start-AcceptanceTarget.ps1` through Windows interoperability. Their shape is:
 
-   ```powershell
-   $uri = 'https://raw.githubusercontent.com/KotdaPK/personal-recovery-bootstrap/<commit>/Start-CleanAcceptance.ps1'
-   Invoke-WebRequest -Uri $uri -OutFile .\Start-CleanAcceptance.ps1
-   Unblock-File .\Start-CleanAcceptance.ps1
-   .\Start-CleanAcceptance.ps1 -PairingId <12-character-id> -LauncherCommit <commit>
+   ```bash
+   curl -fsSLo Start-CleanAcceptance.sh https://raw.githubusercontent.com/KotdaPK/personal-recovery-bootstrap/<commit>/Start-CleanAcceptance.sh
+   chmod +x Start-CleanAcceptance.sh
+   ./Start-CleanAcceptance.sh --pairing-id <12-character-id> --launcher-commit <commit>
    ```
+
+   No PowerShell execution-policy setup is required. The WSL bootstrap invokes
+   each immutable reviewed PowerShell file with a process-scoped policy override;
+   it does not change CurrentUser, LocalMachine, or Group Policy settings.
 
    The target script fetches the public-key-only payload from the temporary
    GitHub branch, validates its schema, expiry, purpose, and exact launcher
@@ -142,6 +145,11 @@ old laptop, and provider credentials remain in their official authentication
 flows. A Google-secret transport would add credential and lifecycle complexity
 without protecting anything confidential, because only the SSH public key is
 published.
+
+When the private `personal-infra` checkout is first needed, the workflow installs
+GitHub CLI if absent and starts `gh auth login --web --git-protocol https`.
+Completing GitHub's browser/device authorization is an unavoidable human action;
+the workflow verifies the login and continues automatically afterward.
 
 ## Acceptance SSH control plane (clean Windows target)
 
